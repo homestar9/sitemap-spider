@@ -1,0 +1,32 @@
+{
+	"requestTimeoutEnabled":true,
+    "whitespaceManagement":"white-space-pref",
+	"requestTimeout":"0,0,5,0",
+	"cacheDefaultObject":"coldbox",
+    "caches":{
+        "coldbox":{
+            "storage":"true",
+            "type":"RAM",
+            "custom":{
+                "timeToIdleSeconds":"1800",
+                "timeToLiveSeconds":"3600"
+            },
+            "class":"lucee.runtime.cache.ram.RamCache",
+            "readOnly":"false"
+        }
+    },
+    "postParametersLimit": 5000,
+    "scriptProtect": "cgi,url,cookie",
+	"datasources" : {},
+	"postSizeLimit": "100",
+    "mailServers":[
+        {
+            "tls":false,
+            "password":"",
+            "port":25,
+            "username":"",
+            "ssl":false,
+            "smtp":"127.0.0.1"
+        }
+    ]
+}

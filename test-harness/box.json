@@ -1,18 +1,18 @@
 {
-    "name":"Tester",
+    "name":"Sitemap Spider",
     "version":"0.0.0",
-    "slug":"tester",
+    "slug":"sitemap-spider",
     "private":true,
     "description":"",
     "dependencies":{
-        "coldbox":"^6.0.0"
+        "coldbox":"^7.0.0"
     },
     "devDependencies":{
         "testbox":"*"
     },
     "installPaths":{
-        "coldbox":"coldbox",
-        "testbox":"testbox"
+        "coldbox":"coldbox/",
+        "testbox":"testbox/"
     },
     "testbox":{
         "runner":"http://localhost:60299/tests/runner.cfm"

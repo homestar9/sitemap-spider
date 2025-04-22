@@ -1,0 +1,20 @@
+{
+    "name":"sitemap-spider-module",
+    "app":{
+        "cfengine":"lucee@5"
+    },
+    "web":{
+        "http":{
+            "port":"55205"
+        },
+        "rewrites":{
+            "enable":"true"
+        },
+        "aliases":{
+            "/moduleroot/login":"../"
+        }
+    },
+    "openBrowser":"false",
+    "cfconfigFile":"../.cfconfig.json",
+    "dotenvFile":"../.env"
+}

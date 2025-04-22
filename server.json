@@ -1,8 +1,7 @@
 {
-    "name":"sitemap-spider-adobe@2018",
+    "name":"sitemap-spider",
     "app":{
-        "serverHomeDirectory":".engine/adobe2018",
-        "cfengine":"adobe@2018"
+        "cfengine":"lucee@5"
     },
     "web":{
         "http":{
@@ -11,13 +10,13 @@
         "rewrites":{
             "enable":"true"
         },
-		"webroot": "test-harness",
-		"aliases":{
+        "webroot":"test-harness",
+        "aliases":{
             "/moduleroot/sitemap-spider":"../"
         }
     },
     "openBrowser":"false",
-	"cfconfig": {
-		"file" : ".cfconfig.json"
-	}
+    "cfconfig":{
+        "file":".cfconfig.json"
+    }
 }

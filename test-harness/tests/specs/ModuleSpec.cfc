@@ -14,9 +14,17 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	/*********************************** BDD SUITES ***********************************/
 
 	function run(){
-		describe( "MockData CFC", function(){
+		describe( "Sitemap Tets", function(){
 			beforeEach( function( currentSpec ){
 			} );
+
+            
+            it( "Can load a website", function(){
+                
+                var sitemap = getInstance( "siteMap@sitemap-spider" );
+                sitemap.create( "https://www.ccisbonds.com" );
+
+            });
 
 		} );
 	}

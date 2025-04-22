@@ -6,35 +6,35 @@
 component {
 
 	// Module Properties
-	this.title 				= "@MODULE_NAME@";
-	this.author 			= "Ortus Solutions";
-	this.webURL 			= "https://www.ortussolutions.com";
+	this.title 				= "sitemap-spider";
+	this.author 			= "Angry Sam Productions";
+	this.webURL 			= "https://www.angrysam.com";
 	this.description 		= "@MODULE_DESCRIPTION@";
 	this.version 			= "@build.version@+@build.number@";
 
 	// Model Namespace
-	this.modelNamespace		= "@MODULE_SLUG@";
+	this.modelNamespace		= "sitemap-spider";
 
 	// CF Mapping
-	this.cfmapping			= "@MODULE_SLUG@";
+	this.cfmapping			= "sitemap-spider";
 
 	// Dependencies
-	this.dependencies 		= [];
+	this.dependencies 		= [ "cbjavaloader" ];
 
 	/**
 	 * Configure Module
 	 */
 	function configure(){
-		settings = {
-
-		};
+        // Module Settings
+		settings = { libPath : modulePath & "/lib" };
 	}
 
 	/**
 	 * Fired when the module is registered and activated.
 	 */
 	function onLoad(){
-
+        //load jsoup
+        wireBox.getInstance( "loader@cbjavaloader" ).appendPaths( settings.libPath );
 	}
 
 	/**

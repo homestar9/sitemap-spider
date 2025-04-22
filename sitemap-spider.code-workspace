@@ -1,0 +1,37 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+        {
+            "path": "test-harness/"
+        }
+    ],
+    "settings": {
+        "files.exclude": {
+            "**/.git": true,
+            "**/.svn": true,
+            "**/.hg": true,
+            "**/CVS": true,
+            "**/.DS_Store": true,
+            "**/Thumbs.db": true,
+            "**/node_modules": true,
+            "**/modules": false,
+            "**/.vscode": true,
+            "**/.github": true,
+            "**/build": true,
+            "test-harness": true,
+            "**/.env.example": true,
+            "**/.env": true,
+            "**/.gitattributes": true,
+            "**/.gitignore": false,
+            "**/.markdownlint.json": true,
+            "**/.editorconfig": true,
+            "**/.cflintrc": true,
+            "**/.cfformat.json": true,
+            "**/.cfconfig.json": false
+        },
+        "explorerExclude.backup": {},
+        "cflint.enabled": false
+    }
+}

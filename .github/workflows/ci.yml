@@ -1,4 +1,4 @@
-name: @MODULE_NAME@ CI
+name: sitemap-spider CI
 
 # Only on Development we build snapshots
 on:
