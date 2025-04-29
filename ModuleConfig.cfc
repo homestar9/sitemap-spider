@@ -26,7 +26,16 @@ component {
 	 */
 	function configure(){
         // Module Settings
-		settings = { libPath : modulePath & "/lib" };
+		settings = { 
+            libPath : modulePath & "/lib",
+            maxDepth = 10,
+            maxPages = 1000,
+            notAllowedPattern = "\.(png|webp|svg|gif|js|css|jpg|jpeg)$|javascript:|mailto:|tel:",
+            priority = 1.0,
+            requestTimeout = 5000, // ms
+            asyncMaxThreads = 10,
+            runAsync = false
+        };
 	}
 
 	/**

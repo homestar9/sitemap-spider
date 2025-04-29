@@ -3,7 +3,7 @@
 */
 component{
 
-	property name="siteMap" inject="SiteMap@sitemap-spider";
+	property name="siteMap" inject="SiteMapService@sitemap-spider";
 
     
     // Index

@@ -2,82 +2,56 @@ component
     hint="I am the sitemap service"
 {
 
+    property name="crawler" inject="Crawler@sitemap-spider";
+    property name="generator" inject="SitemapGenerator@sitemap-spider";
+    property name="settings" inject="coldbox:moduleSettings:sitemap-spider";
+    
     property name="jSoup" inject="javaloader:org.jsoup.Jsoup";
     property name="asyncManager" inject="asyncManager@coldbox";
     property name="logger" inject="logbox:logger:{this}";
 
-    variables.pages = {}; // will contain all the pages of the site
-    variables.hostName = "";
-    variables.notAllowed = [ ".png", ".webp", ".svg", ".gif", ".js", ".css", "mailto:", "tel:", ".jpg", ".jpeg" ];
-    variables.priority = 1.0;
-    variables.index = 1;
-    variables.maxDepth = 10;
-    variables.maxPages = 1000;
-    variables.queue = []; // array of structs containing a queue of urls to crawl
-    variables.queueLock = "sitemap-queue";
-    variables.runAsync = false;
 
-    
+    /**
+     * Initializes the service
+     */
+    function init() {
+        return this;
+    }
     
     /**
      * create
-     *
-     * @url url to scan and parse
+     * Creates a sitemap starting from one or more URLs
+     * 
+     * @url A single URL (string) or array of URLs to start crawling
+     * @runAsync Whether to run the crawler asynchronously
+     * @return A struct containing the crawled pages, sitemap XML, and duration
      */
-    function create( required string url ) {
-        
+    struct function create(
+        required any url, // String or array of strings
+        array excludeUrls = [], // Array of URLs to exclude from crawling
+        boolean runAsync = settings.runAsync
+    ) {
         var start = getTickCount();
-        
-        variables.hostName = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.url ) ).toString();
-        
-        enqueue( arguments.url, 0 ); // queue the first element
+        variables.runAsync = runAsync;
 
-        // should we run syncronously?
-        if ( !variables.runAsync ) {
+        // Normalize url to an array
+        var urlArray = isArray( arguments.url ) ? arguments.url : [ arguments.url ];
 
-            // loop until the queue reaches zero
-            while( variables.queue.len() > 0 ) {
-                runQueueItem();
-            }
+        // Crawl the site and populate pages
+        var pages = crawler.crawl(
+            urls = urlArray,
+            excludeUrls = arguments.excludeUrls, 
+            runAsync = arguments.runAsync 
+        );
 
-        } else {
-
-            logger.info( "About to start first while loop" );
-
-            // loop until the queue reaches zero
-            while( variables.queue.len() > 0 ) {
-            
-                logger.info( "OUTER while loop" );
-                
-                // container to hold all futures
-                var futures = [];
-                
-                // loop until the queue reaches zero
-                while( variables.queue.len() > 0 ) {
-
-                    // appennd the queue process to our list of futures
-                    futures.append( asyncManager.newFuture ( () => {
-                        runQueueItem();
-                    } ) );
-
-                    logger.info( "futures added. #futures.len()# total" );
-
-                }
-
-                logger.info( "About to execute asyncManager" );
-
-                // exeucte all of the futures, and wait for them to complete.
-                var results = asyncManager.all( futures ).get();
-
-            }
-        }
-        
+        // Generate sitemap XML
+        var sitemapXml = generator.generate( pages );
 
         return {
-            "pages": variables.pages,
-            "duration": ( getTickCount() - start )
+            "pages": pages,
+            "sitemap": sitemapXml,
+            "duration": getTickCount() - start
         };
-
     }
 
     /**
@@ -93,6 +67,8 @@ component
         required numeric depth,
         numeric priority=1
     ) {
+        
+        logger.info( "Crawling #arguments.url# at depth #arguments.depth#" );
         
         // if this page has already been crawled, or if we have exceeded our max depth, ignore it
         if ( 
@@ -137,8 +113,9 @@ component
     function getLinks( required page ) {
         var links = []; // will hold an array of urls
         
-        page.select( 'a' ).each( function( link, index ) {
+        page.select( 'a[href]' ).each( function( link, index ) {
             var linkUrl = cleanUrl( arguments.link.attr( "href" ) );
+            logger.info( "Link Found: #linkUrl# (#(!links.find( linkUrl ) && isUrlAllowed( linkUrl ) ? 'Added' : 'Skipped' )#)" );
             // if the url is allowed and isn't already in the list, add it
             if ( 
                 !links.find( linkUrl ) &&
@@ -161,11 +138,11 @@ component
     private any function fetchUrl( required string url ) {
         try {
             var response = jSoup.connect( arguments.url ).ignoreHttpErrors(true).execute();
-            var statusCode = response.statusCode();
             
             // throw exception if non successful status code
-            if ( statusCode != "200" ) {
-                throw( "Bad Status Code: #statusCode#", "NotSuccessful" );
+            if ( response.statusCode() != "200" ) {
+                logger.error( "Failed to fetch #arguments.url#: Status #response.statusCode()#" );
+                return;
             }
             var headers = response.headers(); // java.util.LinkedHashMap which can be used like a struct
             var body = response.parse();
@@ -174,13 +151,8 @@ component
                 "body" : body,
                 "headers": headers
             };
-        } catch ( NotSuccessful e ) {
-            return;
-        } catch ( org.jsoup.UnsupportedMimeTypeException e ) {
-            // can't parse this type of document
-            return;
-        } catch( org.jsoup.HttpStatusException e ) {
-            // non 200 status code
+        } catch ( any e ) {
+            logger.error( "Failed to fetch #arguments.url#: Status #e.message#" );
             return;
         }
     }

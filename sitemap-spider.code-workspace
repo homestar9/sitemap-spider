@@ -5,6 +5,9 @@
 		},
         {
             "path": "test-harness/"
+        },
+        {
+            "path": "test-harness/tests"
         }
     ],
     "settings": {

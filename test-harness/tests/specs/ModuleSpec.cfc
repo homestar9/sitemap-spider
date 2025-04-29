@@ -21,8 +21,12 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
             
             it( "Can load a website", function(){
                 
-                var sitemap = getInstance( "siteMap@sitemap-spider" );
-                sitemap.create( "https://www.ccisbonds.com" );
+                var sitemapService = getInstance( "sitemapService@sitemap-spider" );
+                var result = sitemapService.create( "http://127.0.0.1:62923/" );
+
+                debug( result );
+
+                expect( false ).toBeTrue( true );
 
             });
 
