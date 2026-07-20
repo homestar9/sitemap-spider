@@ -15,9 +15,9 @@
             "**/.git": true,
             "**/.svn": true,
             "**/.hg": true,
-            "**/CVS": true,
             "**/.DS_Store": true,
             "**/Thumbs.db": true,
+            "**/CVS": true,
             "**/node_modules": true,
             "**/modules": false,
             "**/.vscode": true,
@@ -25,7 +25,7 @@
             "**/build": true,
             "test-harness": true,
             "**/.env.example": true,
-            "**/.env": true,
+            "**/.env": false,
             "**/.gitattributes": true,
             "**/.gitignore": false,
             "**/.markdownlint.json": true,
@@ -35,6 +35,7 @@
             "**/.cfconfig.json": false
         },
         "explorerExclude.backup": {},
-        "cflint.enabled": false
+        "cflint.enabled": false,
+        "boxlang.debugger.moduleVersion": "1.1.1+2"
     }
 }
