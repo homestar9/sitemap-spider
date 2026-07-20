@@ -1,0 +1,4 @@
+User-agent: *
+Disallow: /disallow.cfm
+Crawl-delay: 2
+Sitemap: https://example.test/sitemap.xml
