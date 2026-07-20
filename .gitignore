@@ -1,20 +1,89 @@
-# Artifacts and temp folders
-.artifacts/**
-.tmp/**
-
-# Engine + Secrets
+# General Ignores + IDE
+.DS_Store
+settings.xml
+WEB-INF
+.vscode/
 .env
+\.idea/
+Thumbs.db
 .engine/**
 
-# Dependencies
+# logs + tests + temp + media
+logs/**
+tests/results/**
+temp/**
+media/**
+documents/**
+
+# Personal local development session log
+/DEVNOTES.md
+
+# NPM, Bower, ETC
+**/node_modules/*
+**/bower_components/*
+npm-debug.log
+yarn-error.log
+
+# Holds the private FontAwesome Pro registry auth token. Each developer creates their own.
+# See the "Front-end assets" section of README.md.
+.npmrc
+
+# Playwright E2E artifacts (the specs in tests/e2e/ are committed; output is not)
+/test-results/
+/playwright-report/
+/blob-report/
+/.playwright/
+
+## Ignored Dependencies
+coldbox/*
+testbox/*
+modules/*
+modules/**/apidocs/**
 test-harness/coldbox/**
 test-harness/docbox/**
 test-harness/testbox/**
 test-harness/logs/**
 test-harness/modules/**
+test-harness/temp/**
+test-harness/media/**
 
-# modules
-modules/**
+## Build scratch dirs created by build/Build.cfc init()
+.artifacts/
+.tmp/
+.vscode/
 
-# log files
-logs/**
+## app-specific
+temp/**
+plans/**
+
+# Output of `box run-script create:admin` (install/CreateAdmin.cfc).
+# Contains a real BCrypt password hash. Delete it once the row is inserted.
+first-admin.sql
+
+# Vite dev-server hot file (written by `npm run dev`, removed on shutdown).
+includes/hot
+
+# FontAwesome web fonts staged from node_modules by the Vite build (see vite.config.js).
+resources/webfonts/
+
+# Ignore everything under .agents by default
+.agents/**
+.claude/**
+
+# Keep the root folder and manifest
+!.agents/
+!.agents/manifest.json
+
+# Keep project-authored guidelines
+!.agents/guidelines/
+!.agents/guidelines/custom/
+!.agents/guidelines/custom/**
+!.agents/guidelines/overrides/
+!.agents/guidelines/overrides/**
+
+# Keep project-authored custom skills + overrides
+!.agents/skills-custom/
+!.agents/skills-custom/**
+!.agents/skills/overrides/
+!.agents/skills/overrides/**
+
