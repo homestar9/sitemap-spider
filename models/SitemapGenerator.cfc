@@ -7,6 +7,7 @@ component {
     /**
      * generate
      * Generate the XML Sitemap
+     * todo: make sure it can handle images too
      * 
      * @pages (required struct) pages to generate the sitemap for
      */

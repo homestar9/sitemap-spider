@@ -9,7 +9,7 @@ component {
 	this.title 				= "sitemap-spider";
 	this.author 			= "Angry Sam Productions";
 	this.webURL 			= "https://www.angrysam.com";
-	this.description 		= "@MODULE_DESCRIPTION@";
+	this.description 		= "A ColdBox Module to crawl websites and generate sitemaps.";
 	this.version 			= "@build.version@+@build.number@";
 
 	// Model Namespace
@@ -26,15 +26,19 @@ component {
 	 */
 	function configure(){
         // Module Settings
-		settings = { 
+		variables.settings = { 
             libPath : modulePath & "/lib",
+            browserDsl: "Jsoup@sitemap-spider",
             maxDepth = 10,
             maxPages = 1000,
             notAllowedPattern = "\.(png|webp|svg|gif|js|css|jpg|jpeg)$|javascript:|mailto:|tel:",
             priority = 1.0,
-            requestTimeout = 5000, // ms
+            priorityDecrement = 0.1, // each depth reduces priority by this much
+            requestTimeout = 10000, // ms
             asyncMaxThreads = 10,
-            runAsync = false
+            runAsync = false,
+            htmlContentTypePattern = "^(text/html|application/xhtml\+xml)(;.*)?$", // check for links + canonical URLs
+            canonicaHeaderPattern = '<([^>]+)>\s*;\s*rel\s*=\s*"canonical"'
         };
 	}
 

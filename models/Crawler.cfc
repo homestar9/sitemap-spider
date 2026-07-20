@@ -3,19 +3,31 @@ component accessors=true hint="Handles crawling of website URLs" {
     property name="parser" inject="Parser@sitemap-spider";
     property name="logger" inject="logbox:logger:{this}";
     property name="asyncManager" inject="asyncManager@coldbox";
-    property name="jSoup" inject="javaloader:org.jsoup.Jsoup";
     property name="settings" inject="coldbox:moduleSettings:sitemap-spider";
+    property name="wirebox" inject="Wirebox";
 
     /**
      * Initializes the crawler
      */
     function init() {
         variables.pages = {};
+        variables.processedUrls = [];
         variables.queue = [];
         variables.hostName = "";
         variables.queueLock = "";
-        variables.excludeUrls = [];
+        variables.excludeUrls = []; // explicitly excluded by the user
+        variables.ignoredUrls = []; // urls ignored due to rules (e.g., nofollow)
+        variables.badUrls = {}; // urls that couldn't be fetched
         return this;
+    }
+
+    function onDiComplete() {
+        variables.browser = getBrowser();
+    }
+
+
+    private function getBrowser() {
+        return wirebox.getInstance( settings.browserDsl );
     }
 
     /**
@@ -31,7 +43,6 @@ component accessors=true hint="Handles crawling of website URLs" {
         required boolean runAsync 
     ) {
         
-        logger.info( "CRAWLING" );
         // Validate and set hostname from the first URL
         if ( arrayLen( arguments.urls ) == 0 ) {
             throw( type="InvalidArgumentException", message="At least one starting URL is required" );
@@ -75,7 +86,13 @@ component accessors=true hint="Handles crawling of website URLs" {
             }
         }
 
-        return variables.pages;
+        return {
+            "pages": variables.pages,
+            "badUrls": variables.badUrls,
+            "processedUrls": variables.processedUrls,
+            "excludeUrls": variables.excludeUrls,
+            "ignoredUrls": variables.ignoredUrls
+        };
     }
 
     /**
@@ -83,12 +100,21 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @url The URL to validate
      */
     private boolean function isValidUrl( required string url ) {
-        try {
-            var urlObj = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.url ) );
-            return urlObj.getHost( ) == variables.hostName && arguments.url.reMatch( settings.notAllowedPattern ).len( ) == 0;
-        } catch ( any e ) {
-            return false;
-        }
+        return (
+            isValid( "url", arguments.url ) && // CF check
+            isUrlHostMatch( arguments.url ) && // Same host
+            isUrlAllowed( arguments.url ) &&  // allowed url type (e.g. no images, etc.)
+            !isUrlExcluded( arguments.url ) // not excluded
+        );
+    }
+
+    private boolean function isUrlAllowed( required string url ) {
+        return reMatch( arguments.url, settings.notAllowedPattern ).len() == 0
+    }
+
+    private boolean function isUrlHostMatch( required string url ) {
+        var urlObj = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.url ) );
+        return ( urlObj.getHost() == variables.hostName ); 
     }
 
     /**
@@ -109,56 +135,124 @@ component accessors=true hint="Handles crawling of website URLs" {
     private void function crawlUrl( required string url, required numeric depth ) {
         if (
             depth > settings.maxDepth ||
-            variables.pages.len( ) > settings.maxPages ||
-            variables.pages.keyExists( arguments.url )
+            variables.pages.len() > settings.maxPages
         ) {
             return;
         }
 
-        logger.info( "Crawling #arguments.url# at depth #arguments.depth#" );
-        var fetchResult = fetchUrl( arguments.url );
-        if ( !isNull( fetchResult ) ) {
-            
-            var linkData = parser.getLinks( fetchResult.body, fetchResult );
-            var pageUrl = parser.getCanonicalUrl( fetchResult.body );
-            if ( !len( pageUrl ) ) {
-                pageUrl = arguments.url;
-            }
+        // Normalize URL (remove fragments)
+        var normalizedUrl = normalizeUrl( arguments.url );
 
-            variables.pages[ pageUrl ] = {
-                fetched = true,
-                lastModified = parser.getLastModified( fetchResult ),
-                priority = settings.priority,
-                depth = arguments.depth
-            };
-            
-        }
-    }
-
-    /**
-     * Fetches a URL using jSoup
-     * @url The URL to fetch
-     */
-    private any function fetchUrl( required string url ) {
-        try {
-            var response = jSoup.connect( arguments.url )
-                .timeout( settings.requestTimeout )
-                .ignoreHttpErrors( true )
-                .execute( );
-            if ( response.statusCode( ) != 200 ) {
-                logger.warn( "Failed to fetch #arguments.url#: Status #response.statusCode()#" );
-                return;
-            }
-            return {
-                url = arguments.url,
-                body = response.parse( ),
-                headers = response.headers( )
-            };
-        } catch ( any e ) {
-            logger.error( "Error fetching #arguments.url#: #e.message#" );
+        if ( !len( normalizedUrl ) ) {
             return;
         }
+
+        // Check if URL was already processed
+        if ( isUrlProcessed( normalizedUrl ) ) {
+            return;
+        }
+
+        logger.info( "Crawling #normalizedUrl# at depth #arguments.depth#" );
+
+        // always add the normalized url to the processed list
+        appendProcessedUrl( normalizedUrl );
+
+        // Fetch the url.
+        try {
+            var fetchResult = browser.fetchUrl( normalizedUrl );
+        } catch ( any e ) {
+            logger.error( "Error fetching #arguments.url#: #e.message#, Detail: #e.detail#" );
+            appendBadUrl( normalizedUrl, e.message );
+            return;
+        }
+
+        // assert: we have a successful fetch
+        var canonicalUrl = "";
+        var links = [];
+        var lastModified = "";
+        var priority = getPriority( depth );
+
+        // if we have HTML content, parse it, and extract links and canonical URL
+        if ( fetchResult.keyExists( "html" ) ) {
+
+            var parsedPage = parser.parseHtml( fetchResult.html );
+            // let's determine the canonical URL, links
+            canonicalUrl = parser.getCanonicalUrl( fetchResult, parsedPage );
+            // extract links from the parsed page
+            links = parser.getLinks( parsedPage );
+            // determine the last modified date
+            lastModified = parser.getLastModified( fetchResult, parsedPage );
+
+            logger.info( "Parsed HTML content. Canonical URL: #canonicalUrl#, Links found: #links.len()#" );
+
+        } else {
+            // if we don't have HTML content, we can still extract the canonical URL from headers
+            canonicalUrl = parser.getCanonicalUrl( fetchResult );
+            // and the last modified date from headers
+            lastModified = parser.getLastModified( fetchResult );
+        }
+
+        // if the canonical URL has a value and is different than the normalizedURL, perform some checks
+        if ( 
+            len( canonicalUrl ) && 
+            canonicalUrl != normalizedUrl
+        ) {
+
+            // if the canonical URL is invalid, log a warning and skip
+            if ( !isValidUrl( canonicalUrl ) ) {
+                logger.warn( "Invalid canonical URL: #canonicalUrl# for #normalizedUrl#" );
+                return;
+            }
+
+            // if the canonical URL is already processed, skip it.
+            // we only make this check if the canonical URL is different from the normalized URL
+            if ( isUrlProcessed( canonicalUrl ) ) {
+                logger.info( "Canonical URL already processed: #canonicalUrl# for #normalizedUrl#" );
+                return;
+            }
+
+            // append the canonical URL to the processed list
+            appendProcessedUrl( canonicalUrl );
+
+        }
+
+        // append the page to our sitemap
+        appendPage( 
+            url = ( len( canonicalUrl ) ? canonicalUrl : normalizedUrl ),
+            lastModified = ( isDate( lastModified ) ? lastModified : now() ),
+            priority = priority,
+            depth = depth
+        );
+
+        // loop through the links and enqueue
+        for ( var link in links ) {
+            if ( isValidUrl( link ) ) {
+                enqueue( link, depth + 1 );
+            }
+        }
+
     }
+
+    private void function appendPage(
+        required string url,
+        required date lastModified,
+        required numeric priority,
+        required numeric depth
+    ) {
+        variables.pages[ arguments.url ] = {
+            "lastModified": arguments.lastModified,
+            "priority": arguments.priority,
+            "depth": arguments.depth
+        }
+
+    }
+
+    private void function appendProcessedUrl( required string url ) {
+        // TODO(task 06): switch processedUrls to a struct for O(1) lookup
+        variables.processedUrls.append( arguments.url );
+    }
+
+    
 
     /**
      * Enqueues a URL for crawling
@@ -167,13 +261,14 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @excludeUrls URLs to exclude from crawling
      */
     private void function enqueue( required string url, required numeric depth ) {
+
         lock timeout=30 type="exclusive" name=variables.queueLock {
+            
             if (
-                !queueExists( arguments.url ) &&
-                !variables.pages.keyExists( arguments.url ) &&
-                !variables.excludeUrls.findNoCase( arguments.url )
+                !isUrlQueued( arguments.url ) &&
+                !isUrlProcessed( arguments.url )
             ) {
-                logger.info( "ENQUEUE: #arguments.url#" );
+                logger.info( "ENQUEUE: #arguments.url# with depth #arguments.depth#" );
                 variables.queue.append( {
                     url = arguments.url,
                     depth = arguments.depth
@@ -187,7 +282,7 @@ component accessors=true hint="Handles crawling of website URLs" {
      */
     private any function dequeue() {
         lock timeout=30 type="exclusive" name=variables.queueLock {
-            if ( variables.queue.len( ) ) {
+            if ( variables.queue.len() ) {
                 var current = variables.queue[ 1 ];
                 variables.queue.deleteAt( 1 );
                 return current;
@@ -200,8 +295,45 @@ component accessors=true hint="Handles crawling of website URLs" {
      * Checks if a URL exists in the queue
      * @value The URL to check
      */
-    private boolean function queueExists( required string value ) {
-        return variables.queue.findNoCase( arguments.value );
+    private boolean function isUrlQueued( required string url ) {
+        var target = arguments.url; // alias because of CF scope conflict
+        return !!variables.queue.findNoCase( function( item ) {
+            return item.url == target;
+        }  );
+    }
+
+    /**
+     * Normalize URL (remove fragments, preserve trailing slashes and extensions)
+     * @url URL to normalize
+     */
+    private string function normalizeUrl( required string url ) {
+        var cleaned = trim( arguments.url ); // Remove leading/trailing whitespace
+        cleaned = reReplace( cleaned, "##.*$", "" ); // Remove fragments (e.g., #anchor)
+        cleaned = reReplace( cleaned, "^(https?://[^/]+)//+", "\1/", "ALL" ); // Remove double slashes after protocol
+        return cleaned;
+    }
+
+    /**
+     * Check if URL was processed
+     * @url URL to check
+     */
+    private boolean function isUrlProcessed( required string url ) {
+        // TODO(task 06): switch processedUrls to a struct for O(1) lookup
+        return !!variables.processedUrls.findNoCase( arguments.url );
+    }
+
+    private boolean function isUrlExcluded( required string url ) {
+        return !!variables.excludeUrls.findNoCase( arguments.url );
+    }
+
+    private function getPriority( required numeric depth ) {
+        return settings.priority - ( settings.priorityDecrement * depth );
+    }
+
+    private void function appendBadUrl( required string url, required string message ) {
+        variables.badUrls[ arguments.url ] = {
+            "message": arguments.message
+        };
     }
 
 }

@@ -1,6 +1,7 @@
 component accessors=true hint="Parses HTML content to extract links and metadata" {
 
     property name="hostName";
+    property name="jSoup" inject="javaloader:org.jsoup.Jsoup";
     property name="settings" inject="coldbox:moduleSettings:sitemap-spider";
     property name="logger" inject="logbox:logger:{this}";
 
@@ -12,6 +13,11 @@ component accessors=true hint="Parses HTML content to extract links and metadata
         return this;
     }
 
+
+    any function parseHtml( required string html ) {
+        return jSoup.parse( arguments.html );
+    }
+
     /**
      * Extracts links from a page
      * @page The jSoup page object
@@ -20,12 +26,13 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     array function getLinks( required any page ) {
         var links = [ ];
         arguments.page.select( "a[href]" ).each( function( link, index ) {
-            var linkUrl = arguments.link.attr( "abs:href" );
+            var linkUrl = cleanUrl( arguments.link.attr( "abs:href" ) );
+            logger.info( "Found link: #linkUrl#" );
             if ( 
                 isUrlAllowed( linkUrl ) && 
+                !isNoFollow( arguments.link ) &&
                 !links.find( linkUrl ) 
             ) {
-                logger.info( "Valid link: #linkUrl#" );
                 links.append( linkUrl );
             }
         } );
@@ -44,11 +51,31 @@ component accessors=true hint="Parses HTML content to extract links and metadata
         return "";
     }
 
-    string function getCanonicalUrl( required any fetchResult ) {
-        var canonical = fetchResult.select("link[rel=canonical]");
-        if ( canonical.size() ) {
-            return canonical.first().attr( "abs:href" );
+    string function getCanonicalUrl( required struct fetchResult, any parsedPage ) {
+        // If parsedPage is provided, use it; otherwise, parse the HTML from fetchResult
+        if ( arguments.keyExists( "parsedPage" ) ) {
+            var canonical = parsedPage.select("link[rel=canonical]");
+            if ( canonical.size() ) {
+                return canonical.first().attr( "abs:href" );
+            }
         }
+
+        // next try to get canonical from fetchResult.headers
+        // header will look like: <https://example.com/page.html>; rel="canonical"
+        if ( fetchResult.headers.keyExists( "Link" ) ) {
+            var linkHeader = fetchResult.headers[ "Link" ];
+            // Use regex to extract the URL from the Link header
+            var matches = reMatch( '^<([^>]+)>\s*;\s*rel\s*=\s*["'']?canonical["'']?$', linkHeader );
+            if ( matches.len() ) {
+                // Extract URL from <...> in first match
+                var urlMatch = reMatch( '^<([^>]+)>', matches[1] );
+                if ( urlMatch.len() ) {
+                    // strip the left and right brackets
+                    return mid( urlMatch[ 1 ], 2, len( urlMatch[ 1 ] ) - 1 );
+                }
+            }
+        }
+        
         return "";
     }
 
@@ -58,17 +85,13 @@ component accessors=true hint="Parses HTML content to extract links and metadata
      */
     private string function cleanUrl( required string url ) {
         var cleaned = arguments.url
-            .replace( " ", "", "all" )
-            .replace( "%20", "", "all" )
-            .replace( "\", "/", "all" );
+            .replace( " ", "", "all" ) // remove spaces
+            .replace( "%20", "", "all" ) // remove URL-encoded spaces
+            .replace( "\", "/", "all" );  // ensure slash is used instead of backslash
         // Remove fragments (e.g., #anchor)
         var fragmentIndex = cleaned.find( "##" );
         if ( fragmentIndex > 0 ) {
             cleaned = cleaned.left( fragmentIndex );
-        }
-        // Ensure trailing slash for consistency
-        if ( !cleaned.endsWith( "/" ) && !cleaned.reFind( "\.[a-zA-Z0-9]+$" ) ) {
-            cleaned &= "/";
         }
         return cleaned;
     }
@@ -85,13 +108,30 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             var urlObj = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.url ) );
             var protocol = urlObj.getProtocol( );
             var host = urlObj.getHost( );
+
+            logger.info( "Checking URL: #arguments.url#, Protocol: #protocol#, Host: #host#" );
+
             return ( protocol == "http" || protocol == "https" ) &&
                 host == variables.hostName &&
                 !reFindNoCase( settings.notAllowedPattern, arguments.url );
         } catch ( any e ) {
-            logger.debug( "Invalid URL: #arguments.url# - #e.message#" );
+            //logger.debug( "Invalid URL: #arguments.url# - #e.message#" );
             return false;
         }
+    }
+
+    /**
+     * isNoFollow
+     * Checks if a link has rel="nofollow"
+     * @link The jSoup link element
+     */
+    private function isNoFollow( required any link ) {
+        var relAttr = link.attr( "rel" );
+        if ( len( relAttr ) ) {
+            var relValues = listToArray( relAttr, " " );
+            return arrayFindNoCase( relValues, "nofollow" ) > 0;
+        }
+        return false;
     }
 
 }
