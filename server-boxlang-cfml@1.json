@@ -1,0 +1,37 @@
+{
+    "name":"sitemap-spider-boxlang@1",
+    "app":{
+        "serverHomeDirectory":".engine/boxlang-cfml",
+        "cfengine":"boxlang@1"
+    },
+    "fusionreactor":{
+        "enable":false
+    },
+    "web":{
+        "http":{
+            "port":"61002"
+        },
+        "rewrites":{
+            "enable":true
+        },
+        "allowedExt":"webmanifest,avif",
+        "webroot":"test-harness",
+        "aliases":{
+            "/moduleroot/sitemap-spider":"./",
+            "/modules/sitemap-spider":"./"
+        }
+    },
+    "JVM":{
+        "heapSize":"768",
+        "javaVersion":"openjdk21_jre",
+        "args":"-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=8888"
+    },
+    "openBrowser":false,
+    "cfconfig":{
+        "file":".cfconfig.json"
+    },
+    "env":{},
+    "scripts":{
+        "onServerInitialInstall":"install bx-compat-cfml --noSave"
+    }
+}

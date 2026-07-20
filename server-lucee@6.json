@@ -1,22 +1,25 @@
 {
-    "name":"sitemap-spider",
+    "name":"sitemap-spider-lucee@6",
     "app":{
-        "cfengine":"lucee@5"
+        "serverHomeDirectory":".engine/lucee6",
+        "cfengine":"lucee@6"
     },
     "web":{
         "http":{
-            "port":"60299"
+            "port":"61002"
         },
         "rewrites":{
             "enable":"true"
         },
+        "allowedExt":"webmanifest,avif",
         "webroot":"test-harness",
         "aliases":{
-            "/moduleroot/sitemap-spider":"../"
+            "/moduleroot/sitemap-spider":"./"
         }
     },
     "openBrowser":"false",
     "cfconfig":{
         "file":".cfconfig.json"
-    }
+    },
+    "console=false":true
 }
