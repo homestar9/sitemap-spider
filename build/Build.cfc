@@ -1,61 +1,54 @@
 /**
- * Build process for ColdBox Modules
- * Adapt to your needs.
+ * Build process for the Mixr ColdBox module.
+ *
+ * Produces a ForgeBox-shaped artifact under .artifacts/<projectName>/<version>/
+ * containing only the runtime files consumers need (ModuleConfig.cfc,
+ * helpers/, models/, box.json, readme.md, changelog.md, LICENSE.md).
+ *
+ * Invoked by box.json's build:module script:
+ *   task run taskFile=build/Build.cfc :projectName=mixr :version=3.0.0
  */
 component {
 
 	/**
-	 * Constructor
+	 * Constructor — wires paths, excludes, and resets working directories.
 	 */
 	function init(){
-		// Setup Pathing
 		variables.cwd          = getCWD().reReplace( "\.$", "" );
-		variables.artifactsDir = cwd & "/.artifacts";
-		variables.buildDir     = cwd & "/.tmp";
-		variables.apiDocsURL   = "http://localhost:60299/apidocs/";
-		variables.testRunner   = "http://localhost:60299/tests/runner.cfm";
+		variables.artifactsDir = variables.cwd & "/.artifacts";
+		variables.buildDir     = variables.cwd & "/.tmp";
 
-		// Source Excludes Not Added to final binary
+		// Source excludes — regex patterns matched against paths under cwd.
+		// `^\..*` covers every dotfile/dir: .artifacts, .tmp, .engine, .github,
+		// .vscode, .gitignore, .cfformat.json, .cflintrc, .markdownlint.json,
+		// .cfconfig.json, .env, etc.
 		variables.excludes = [
 			"build",
-			"node-modules",
-			"resources",
 			"test-harness",
-			"(package|package-lock).json",
-			"webpack.config.js",
 			"server-.*\.json",
-			"docker-compose.yml",
+			"test-results-.*\.txt",
+			"(CLAUDE|AGENTS)\.md",
 			"^\..*"
 		];
 
-		// Cleanup + Init Build Directories
-		[
-			variables.buildDir,
-			variables.artifactsDir
-		].each( function( item ){
+		// Cleanup + init build directories
+		[ variables.buildDir, variables.artifactsDir ].each( function( item ){
 			if ( directoryExists( item ) ) {
 				directoryDelete( item, true );
 			}
-			// Create directories
 			directoryCreate( item, true, true );
 		} );
-
-		// Create Mappings
-		fileSystemUtil.createMapping(
-			"coldbox",
-			variables.cwd & "test-harness/coldbox"
-		);
 
 		return this;
 	}
 
 	/**
-	 * Run the build process: test, build source, docs, checksums
+	 * Run the full build: copy source → token-replace → zip → checksums.
 	 *
-	 * @projectName The project name used for resources and slugs
-	 * @version The version you are building
-	 * @buldID The build identifier
-	 * @branch The branch you are building
+	 * @projectName The project name (used for the artifact filename and project mapping)
+	 * @version     The version being built (defaults to 1.0.0 if not provided)
+	 * @buildID     Build identifier (defaults to a fresh UUID)
+	 * @branch      Branch being built — master gets the real buildID, others get "-snapshot"
 	 */
 	function run(
 		required projectName,
@@ -63,23 +56,12 @@ component {
 		buildID = createUUID(),
 		branch  = "development"
 	){
-		// Create project mapping
+		// Project mapping so the module resolves under its slug during the build
 		fileSystemUtil.createMapping( arguments.projectName, variables.cwd );
 
-		// Build the source
 		buildSource( argumentCollection = arguments );
-
-		// Build Docs
-		arguments.outputDir = variables.buildDir & "/apidocs";
-		docs( argumentCollection = arguments );
-
-		// checksums
 		buildChecksums();
 
-		// Build latest changelog
-		latestChangelog();
-
-		// Finalize Message
 		print
 			.line()
 			.boldMagentaLine( "Build Process is done! Enjoy your build!" )
@@ -87,34 +69,13 @@ component {
 	}
 
 	/**
-	 * Run the test suites
-	 */
-	function runTests(){
-		// Tests First, if they fail then exit
-		print.blueLine( "Testing the package, please wait..." ).toConsole();
-
-		command( "testbox run" )
-			.params(
-				runner     = variables.testRunner,
-				verbose    = true,
-				outputFile = "#variables.cwd#/test-harness/results/test-results",
-				outputFormats="json,antjunit"
-			)
-			.run();
-
-		// Check Exit Code?
-		if ( shell.getExitCode() ) {
-			return error( "Cannot continue building, tests failed!" );
-		}
-	}
-
-	/**
-	 * Build the source
+	 * Copy source into a clean working dir, swap build tokens, and zip it
+	 * into .artifacts/<projectName>/<version>/<projectName>-<version>.zip.
 	 *
-	 * @projectName The project name used for resources and slugs
-	 * @version The version you are building
-	 * @buldID The build identifier
-	 * @branch The branch you are building
+	 * @projectName The project name (used for the artifact filename and folder)
+	 * @version     The version being built
+	 * @buildID     Build identifier embedded in the inline build-stamp file
+	 * @branch      Branch being built — master gets the real buildID, others get "-snapshot"
 	 */
 	function buildSource(
 		required projectName,
@@ -122,38 +83,30 @@ component {
 		buildID = createUUID(),
 		branch  = "development"
 	){
-		// Build Notice ID
 		print
 			.line()
 			.boldMagentaLine(
-				"Building #arguments.projectName# v#arguments.version#+#arguments.buildID# from #cwd# using the #arguments.branch# branch."
+				"Building #arguments.projectName# v#arguments.version#+#arguments.buildID# from #variables.cwd# using the #arguments.branch# branch."
 			)
 			.toConsole();
 
 		ensureExportDir( argumentCollection = arguments );
 
-		// Project Build Dir
-		variables.projectBuildDir = variables.buildDir & "/#projectName#";
-		directoryCreate(
-			variables.projectBuildDir,
-			true,
-			true
-		);
+		variables.projectBuildDir = variables.buildDir & "/#arguments.projectName#";
+		directoryCreate( variables.projectBuildDir, true, true );
 
-		// Copy source
 		print.blueLine( "Copying source to build folder..." ).toConsole();
-		copy(
-			variables.cwd,
-			variables.projectBuildDir
-		);
+		copy( variables.cwd, variables.projectBuildDir );
 
-		// Create build ID
+		// Drop a build-stamp file for human inspection of the artifact
 		fileWrite(
-			"#variables.projectBuildDir#/#projectName#-#version#+#buildID#",
+			"#variables.projectBuildDir#/#arguments.projectName#-#arguments.version#+#arguments.buildID#",
 			"Built with love on #dateTimeFormat( now(), "full" )#"
 		);
 
-		// Updating Placeholders
+		// Token replacement — no-op today because box.json carries a literal version.
+		// Kept in so a future CI step (box package set version=@build.version@+@build.number@)
+		// works without further changes here.
 		print.greenLine( "Updating version identifier to #arguments.version#" ).toConsole();
 		command( "tokenReplace" )
 			.params(
@@ -172,8 +125,7 @@ component {
 			)
 			.run();
 
-		// zip up source
-		var destination = "#variables.exportsDir#/#projectName#-#version#.zip";
+		var destination = "#variables.exportsDir#/#arguments.projectName#-#arguments.version#.zip";
 		print.greenLine( "Zipping code to #destination#" ).toConsole();
 		cfzip(
 			action    = "zip",
@@ -183,75 +135,17 @@ component {
 			recurse   = true
 		);
 
-		// Copy box.json for convenience
+		// Copy box.json next to the zip for convenience (ForgeBox publish convention)
 		fileCopy(
 			"#variables.projectBuildDir#/box.json",
 			variables.exportsDir
 		);
 	}
 
-	/**
-	 * Produce the API Docs
-	 */
-	function docs(
-		required projectName,
-		version   = "1.0.0",
-		outputDir = ".tmp/apidocs"
-	){
-		ensureExportDir( argumentCollection = arguments );
-
-		// Create project mapping
-		fileSystemUtil.createMapping( arguments.projectName, variables.cwd );
-		// Generate Docs
-		print.greenLine( "Generating API Docs, please wait..." ).toConsole();
-
-		command( "docbox generate" )
-			.params(
-				"source"                = "models",
-				"mapping"               = "models",
-				"strategy-projectTitle" = "#arguments.projectName# v#arguments.version#",
-				"strategy-outputDir"    = arguments.outputDir
-			)
-			.run();
-
-		print.greenLine( "API Docs produced at #arguments.outputDir#" ).toConsole();
-
-		var destination = "#variables.exportsDir#/#projectName#-docs-#version#.zip";
-		print.greenLine( "Zipping apidocs to #destination#" ).toConsole();
-		cfzip(
-			action    = "zip",
-			file      = "#destination#",
-			source    = "#arguments.outputDir#",
-			overwrite = true,
-			recurse   = true
-		);
-	}
-
-	/**
-	 * Build the latest changelog file: changelog-latest.md
-	 */
-	function latestChangelog(){
-		print.blueLine( "Building latest changelog..." ).toConsole();
-
-		if ( !fileExists( variables.cwd & "changelog.md" ) ) {
-			return error( "Cannot continue building, changelog.md file doesn't exist!" );
-		}
-
-		fileWrite(
-			variables.cwd & "changelog-latest.md",
-			fileRead( variables.cwd & "changelog.md" ).split( "----" )[ 2 ].trim() & chr( 13 ) & chr( 10 )
-		);
-
-		print
-			.greenLine( "Latest changelog file created at `changelog-latest.md`" )
-			.line()
-			.line( fileRead( variables.cwd & "changelog-latest.md" ) );
-	}
-
 	/********************************************* PRIVATE HELPERS *********************************************/
 
 	/**
-	 * Build Checksums
+	 * Write SHA-512 and MD5 checksum files next to every zip in the exports dir.
 	 */
 	private function buildChecksums(){
 		print.greenLine( "Building checksums" ).toConsole();
@@ -274,12 +168,19 @@ component {
 	}
 
 	/**
-	 * DirectoryCopy is broken in lucee
+	 * Exclude-aware directory copy. Walks the top level of src, copying files
+	 * and recursing into directories that don't match any pattern in variables.excludes.
+	 *
+	 * Hand-rolled instead of using directoryCopy with a filter because the
+	 * combination has cross-engine quirks on Adobe CF and Lucee.
+	 *
+	 * @src     Source directory
+	 * @target  Destination directory
+	 * @recurse Reserved — directoryCopy below always recurses
 	 */
 	private function copy( src, target, recurse = true ){
-		// process paths with excludes
 		directoryList(
-			src,
+			arguments.src,
 			false,
 			"path",
 			function( path ){
@@ -292,7 +193,6 @@ component {
 				return !isExcluded;
 			}
 		).each( function( item ){
-			// Copy to target
 			if ( fileExists( item ) ) {
 				print.blueLine( "Copying #item#" ).toConsole();
 				fileCopy( item, target );
@@ -308,24 +208,20 @@ component {
 	}
 
 	/**
-	 * Gets the last Exit code to be used
-	 **/
-	private function getExitCode(){
-		return ( createObject( "java", "java.lang.System" ).getProperty( "cfml.cli.exitCode" ) ?: 0 );
-	}
-
-	/**
-	 * Ensure the export directory exists at artifacts/NAME/VERSION/
+	 * Idempotently create .artifacts/<projectName>/<version>/ and pin its path.
+	 *
+	 * @projectName The project name
+	 * @version     The version being built
 	 */
 	private function ensureExportDir(
 		required projectName,
-		version   = "1.0.0"
+		version = "1.0.0"
 	){
 		if ( structKeyExists( variables, "exportsDir" ) && directoryExists( variables.exportsDir ) ){
 			return;
 		}
-		// Prepare exports directory
-		variables.exportsDir = variables.artifactsDir & "/#projectName#/#arguments.version#";
+		variables.exportsDir = variables.artifactsDir & "/#arguments.projectName#/#arguments.version#";
 		directoryCreate( variables.exportsDir, true, true );
 	}
+
 }

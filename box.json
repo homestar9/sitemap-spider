@@ -1,17 +1,17 @@
 {
     "name":"sitemap-spider",
     "version":"1.0.0",
-    "location":"https://downloads.ortussolutions.com/ortussolutions/coldbox-modules/@MODULE_SLUG@/@build.version@/@MODULE_SLUG@-@build.version@.zip",
-    "author":"Ortus Solutions <info@ortussolutions.com>",
-    "homepage":"https://github.com/coldbox-modules/@MODULE_SLUG@",
-    "documentation":"https://github.com/coldbox-modules/@MODULE_SLUG@",
+    "location":"forgeboxStorage",
+    "author":"Angry Sam Productions, Inc.",
+    "homepage":"https://github.com/homestar9/sitemap-spider",
+    "documentation":"https://github.com/homestar9/sitemap-spider",
     "repository":{
         "type":"git",
-        "url":"https://github.com/coldbox-modules/@MODULE_SLUG@"
+        "url":"https://github.com/homestar9/sitemap-spider"
     },
-    "bugs":"https://github.com/coldbox-modules/@MODULE_SLUG@",
-    "shortDescription":"Description goes here",
-    "slug":"@MODULE_SLUG@",
+    "bugs":"https://github.com/homestar9/sitemap-spider/issues",
+    "shortDescription":"A simple sitemap generator for ColdBox applications",
+    "slug":"sitemap-spider",
     "type":"modules",
     "keywords":"",
     "license":[
@@ -22,7 +22,7 @@
     ],
     "contributors":[],
     "dependencies":{
-        "cbjavaloader":"^2.1.1+8"
+        "cbjavaloader":"^2.3.0+2"
     },
     "devDependencies":{
         "commandbox-cfformat":"*",
@@ -36,16 +36,33 @@
         "/server*.json"
     ],
     "scripts":{
-        "setupTemplate":"task run taskFile=build/SetupTemplate.cfc",
         "build:module":"task run taskFile=build/Build.cfc :projectName=`package show slug` :version=`package show version`",
         "build:docs":"task run taskFile=build/Build.cfc target=docs :projectName=`package show slug` :version=`package show version`",
+        "install:dependencies":"install && cd test-harness && install",
+        "create:admin":"task run taskFile=install/CreateAdmin.cfc",
         "release":"recipe build/release.boxr",
         "format":"cfformat run helpers,models,test-harness/tests/,ModuleConfig.cfc --overwrite",
         "format:watch":"cfformat watch helpers,models,test-harness/tests/,ModuleConfig.cfc ./.cfformat.json",
-        "format:check":"cfformat check helpers,models,test-harness/tests/,ModuleConfig.cfc"
+        "format:check":"cfformat check helpers,models,test-harness/tests/,ModuleConfig.cfc ./.cfformat.json",
+        "start:boxlang":"server start serverConfigFile=server-boxlang-cfml@1.json",
+        "start:lucee5":"server start serverConfigFile=server-lucee@5.json",
+        "start:lucee6":"server start serverConfigFile=server-lucee@6.json",
+        "start:2023":"server start serverConfigFile=server-adobe@2023.json",
+        "stop:boxlang":"server stop serverConfigFile=server-boxlang-cfml@1.json",
+        "stop:lucee5":"server stop serverConfigFile=server-lucee@5.json",
+        "stop:lucee6":"server stop serverConfigFile=server-lucee@6.json",
+        "stop:2023":"server stop serverConfigFile=server-adobe@2023.json",
+        "logs:boxlang":"server log serverConfigFile=server-boxlang-cfml@1.json",
+        "logs:lucee5":"server log serverConfigFile=server-lucee@5.json --follow",
+        "logs:lucee6":"server log serverConfigFile=server-lucee@6.json --follow",
+        "logs:2023":"server log serverConfigFile=server-adobe@2023.json --follow",
+        "forget:boxlang":"server forget serverConfigFile=server-boxlang-cfml@1.json",
+        "forget:lucee5":"server forget serverConfigFile=server-lucee@5.json",
+        "forget:lucee6":"server forget serverConfigFile=server-lucee@6.json",
+        "forget:2023":"server forget serverConfigFile=server-adobe@2023.json"
     },
     "testbox":{
-        "runner":"http://localhost:60299/tests/runner.cfm"
+        "runner":"http://localhost:61002/tests/runner.cfm"
     },
     "installPaths":{
         "cbjavaloader":"modules/cbjavaloader/"
