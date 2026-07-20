@@ -17,6 +17,7 @@ documents/**
 
 # Personal local development session log
 /DEVNOTES.md
+docs/**
 
 # NPM, Bower, ETC
 **/node_modules/*
