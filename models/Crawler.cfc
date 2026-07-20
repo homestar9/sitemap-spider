@@ -135,7 +135,7 @@ component accessors=true hint="Handles crawling of website URLs" {
     private void function crawlUrl( required string url, required numeric depth ) {
         if (
             depth > settings.maxDepth ||
-            variables.pages.len() > settings.maxPages
+            structCount( variables.pages ) > settings.maxPages
         ) {
             return;
         }
@@ -296,10 +296,15 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @value The URL to check
      */
     private boolean function isUrlQueued( required string url ) {
-        var target = arguments.url; // alias because of CF scope conflict
-        return !!variables.queue.findNoCase( function( item ) {
-            return item.url == target;
-        }  );
+        // Loop instead of queue.findNoCase( closure ) because Adobe 2023 rejects
+        // the closure-predicate form of findNoCase (Lucee accepts it). == is a
+        // case-insensitive string compare in CFML, matching the old behavior.
+        for ( var item in variables.queue ) {
+            if ( item.url == arguments.url ) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

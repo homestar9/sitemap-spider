@@ -3,7 +3,7 @@
 <head>
   <title>JS Redirect</title>
   <script>
-    window.onload = function() { location.replace('contact.html'); }
+    window.onload = function() { location.replace('contact.cfm'); }
   </script>
 </head>
 <body>

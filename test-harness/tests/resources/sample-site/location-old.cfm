@@ -1,3 +1,3 @@
 <cfscript>
-    location("location-new.html");
+    location("location-new.cfm");
 </cfscript>

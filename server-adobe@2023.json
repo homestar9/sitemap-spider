@@ -1,5 +1,5 @@
 {
-    "name":"caffeinecms-adobe@2023",
+    "name":"sitemap-spider-adobe@2023",
     "app":{
         "serverHomeDirectory":".engine/adobe2023",
         "cfengine":"adobe@2023"
@@ -14,7 +14,7 @@
         "allowedExt":"webmanifest,avif",
         "webroot":"test-harness",
         "aliases":{
-            "/moduleroot/caffeinecms":"./"
+            "/moduleroot/sitemap-spider":"./"
         }
     },
     "jvm":{
