@@ -1,12 +1,12 @@
 /**
- * Build process for the Mixr ColdBox module.
+ * Build process for the sitemap-spider ColdBox module.
  *
  * Produces a ForgeBox-shaped artifact under .artifacts/<projectName>/<version>/
  * containing only the runtime files consumers need (ModuleConfig.cfc,
- * helpers/, models/, box.json, readme.md, changelog.md, LICENSE.md).
+ * helpers/, models/, lib/, box.json, readme.md, changelog.md, LICENSE).
  *
  * Invoked by box.json's build:module script:
- *   task run taskFile=build/Build.cfc :projectName=mixr :version=3.0.0
+ *   task run taskFile=build/Build.cfc :projectName=sitemap-spider :version=1.0.0
  */
 component {
 
@@ -104,9 +104,10 @@ component {
 			"Built with love on #dateTimeFormat( now(), "full" )#"
 		);
 
-		// Token replacement — no-op today because box.json carries a literal version.
-		// Kept in so a future CI step (box package set version=@build.version@+@build.number@)
-		// works without further changes here.
+		// Token replacement — rewrites the @build.version@+@build.number@ tokens in
+		// the copied source (ModuleConfig.cfc's this.version) with the real version
+		// from box.json and this build's ID. box.json itself carries the literal
+		// version, so it is the source of truth passed in as arguments.version.
 		print.greenLine( "Updating version identifier to #arguments.version#" ).toConsole();
 		command( "tokenReplace" )
 			.params(
