@@ -13,8 +13,9 @@ component
     any function fetchUrl( required string url ) {
             
         var response = jSoup.connect( arguments.url )
+            .userAgent( settings.userAgent )
             .timeout( settings.requestTimeout )
-            .ignoreContentType( true ) // otherise only HTML is allowed 
+            .ignoreContentType( true ) // otherise only HTML is allowed
             .ignoreHttpErrors( true )
             .execute();
 
@@ -68,6 +69,31 @@ component
         }
 
         return result;
+    }
+
+    /**
+     * Fetches the raw text body of a URL, regardless of content type. Used for
+     * robots.txt (text/plain), which fetchUrl would drop. Throws a
+     * StatusCodeException on a non-200 so the Crawler can fall back to allow-all.
+     * @url The URL to fetch
+     */
+    string function getText( required string url ) {
+
+        var response = jSoup.connect( arguments.url )
+            .userAgent( settings.userAgent )
+            .timeout( settings.requestTimeout )
+            .ignoreContentType( true ) // robots.txt is text/plain, not HTML
+            .ignoreHttpErrors( true )
+            .execute();
+
+        if ( response.statusCode() != 200 ) {
+            throw(
+                message = "Failed to fetch #arguments.url# HTTP request returned status code #response.statusCode()#",
+                type = "StatusCodeException"
+            );
+        }
+
+        return response.body();
     }
 
 }

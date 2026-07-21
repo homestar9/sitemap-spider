@@ -31,9 +31,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		// Pages that must NOT appear in the sitemap.
 		// - nofollow.cfm is linked from index.cfm with rel="nofollow", so the
 		//   parser skips it. This is real v1 behavior.
-		// - disallow.cfm is currently absent only because nothing links to it.
-		//   robots.txt Disallow enforcement lands in task 07; once it does, add
-		//   a reachable link to disallow.cfm and this assertion still holds.
+		// - disallow.cfm IS linked from index.cfm (task 07) but robots.txt has
+		//   "Disallow: /disallow.cfm", so the crawler skips it and records it in
+		//   disallowedUrls. See the "reports a robots-disallowed page" spec below.
 		ignoredPages = [
 			"disallow.cfm",
 			"nofollow.cfm"
@@ -63,7 +63,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			it( "returns a struct with the expected top-level keys", function(){
 				expect( variables.result ).toBeStruct();
-				expect( variables.result ).toHaveKey( "pages,badUrls,processedUrls,duration" );
+				expect( variables.result ).toHaveKey( "pages,badUrls,processedUrls,disallowedUrls,duration" );
 			} );
 
 			it( "includes the reachable valid pages", function(){
@@ -76,6 +76,13 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				for ( var page in variables.testData.ignoredPages ) {
 					expect( variables.result.pages ).notToHaveKey( variables.appRoot & page );
 				}
+			} );
+
+			it( "reports a robots-disallowed page in disallowedUrls", function(){
+				// index.cfm links to disallow.cfm, but robots.txt disallows it, so
+				// it is skipped (never fetched) and recorded in disallowedUrls.
+				expect( variables.result.disallowedUrls ).toBeArray();
+				expect( variables.result.disallowedUrls ).toInclude( variables.appRoot & "disallow.cfm" );
 			} );
 
 			it( "records unreachable links as bad URLs", function(){

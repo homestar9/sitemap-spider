@@ -24,6 +24,7 @@ component {
         variables.pages        = {}; // url -> fetch-result struct
         variables.throwUrls    = {}; // url -> error message
         variables.requestedUrls = []; // every fetchUrl() call, in order
+        variables.robotsContent = ""; // body returned by getText() (robots.txt)
         return this;
     }
 
@@ -91,6 +92,30 @@ component {
      */
     array function getRequestedUrls() {
         return variables.requestedUrls;
+    }
+
+    /**
+     * setRobots
+     * Registers the body getText() returns, so a spec can drive the Crawler's
+     * robots.txt handling. When unset, getText() returns "" (no rules -> allow
+     * all), matching a site with no robots.txt.
+     *
+     * @content The robots.txt body to serve.
+     */
+    function setRobots( required string content ) {
+        variables.robotsContent = arguments.content;
+        return this;
+    }
+
+    /**
+     * getText
+     * Returns the registered robots.txt body (empty by default). Mirrors the real
+     * Jsoup browser's getText(), which the Crawler calls once at crawl start.
+     *
+     * @url The URL to fetch (ignored; this fake serves one robots body).
+     */
+    string function getText( required string url ) {
+        return variables.robotsContent;
     }
 
 }

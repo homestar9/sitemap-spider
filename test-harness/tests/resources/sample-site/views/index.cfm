@@ -16,6 +16,8 @@
         <a href="./nofollow.cfm" rel="nofollow">Sort by price (nofollow)</a><br />
         <!-- INTENTIONAL: Missing page -->
         <a href="./missing.cfm">Missing Page</a><br />
+        <!-- INTENTIONAL: robots.txt Disallow target (blocked by robots, task 07) -->
+        <a href="./disallow.cfm">Disallowed Page</a><br />
 
         <div id="js-links"></div>
 

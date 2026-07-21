@@ -1,6 +1,7 @@
 component accessors=true hint="Handles crawling of website URLs" {
 
     property name="parser" inject="Parser@sitemap-spider";
+    property name="robotsParser" inject="RobotsParser@sitemap-spider";
     property name="logger" inject="logbox:logger:{this}";
     property name="settings" inject="coldbox:moduleSettings:sitemap-spider";
     property name="wirebox" inject="Wirebox";
@@ -21,6 +22,11 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.hostName = "";
         variables.excludeUrls = {}; // set of URLs explicitly excluded by the user
         variables.badUrls = {}; // urls that couldn't be fetched
+        variables.disallowedUrls = {}; // set of URLs skipped because robots.txt disallows them
+        // robots.txt state, (re)loaded at the start of each crawl().
+        variables.robotsBasePath = "/"; // site-root path the seed URL lives under
+        variables.effectiveCrawlDelay = 0; // seconds to wait between fetches (capped)
+        variables.hasFetched = false; // becomes true after the first fetch, so the delay is not applied before it
         return this;
     }
 
@@ -54,6 +60,10 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.hostName = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.urls[ 1 ] ) ).getHost( );
         parser.setHostName( variables.hostName );
 
+        // Load robots.txt for the first seed URL. Sets robotsBasePath and the
+        // effective crawl delay used below.
+        loadRobots( arguments.urls[ 1 ] );
+
         // Turn the excluded-URL array into a set for O(1) membership checks.
         variables.excludeUrls = {};
         for ( var excluded in arguments.excludeUrls ) {
@@ -65,7 +75,7 @@ component accessors=true hint="Handles crawling of website URLs" {
 
             logger.info( "CRAWLING:" & arguments.url );
 
-            if ( isValidUrl( arguments.url ) ) {
+            if ( shouldEnqueue( arguments.url ) ) {
                 enqueue( arguments.url, 0 );
             } else {
                 logger.warn( "Invalid or non-matching URL skipped: #arguments.url#" );
@@ -81,8 +91,49 @@ component accessors=true hint="Handles crawling of website URLs" {
         return {
             "pages": variables.pages,
             "badUrls": variables.badUrls,
-            "processedUrls": structKeyArray( variables.processedUrls )
+            "processedUrls": structKeyArray( variables.processedUrls ),
+            "disallowedUrls": structKeyArray( variables.disallowedUrls )
         };
+    }
+
+    /**
+     * Fetches and parses robots.txt for the crawl, and computes the crawl delay.
+     * @seedUrl The first starting URL; its scheme, host, and base path locate
+     *          robots.txt and define the base that Disallow/Allow paths are
+     *          matched relative to.
+     *
+     * robots.txt is read at <scheme>://<authority><basePath>robots.txt, where
+     * basePath is the seed URL's path up to and including its last "/". Matching
+     * is base-relative, so a site served under a subpath (as the sample site is)
+     * can ship its own robots.txt; for a site at the host root this equals the
+     * standard behavior.
+     *
+     * A missing or unreachable robots.txt (getText throws) or respectRobotsTxt =
+     * false leaves an empty rule set, so every URL is allowed.
+     */
+    private void function loadRobots( required string seedUrl ) {
+        var urlObj = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.seedUrl ) );
+        var path = urlObj.getPath();
+        var lastSlash = path.lastIndexOf( "/" );
+        variables.robotsBasePath = ( lastSlash >= 0 ) ? path.substring( 0, lastSlash + 1 ) : "/";
+
+        var robotsContent = "";
+        if ( settings.respectRobotsTxt ) {
+            var port = urlObj.getPort();
+            var authority = urlObj.getHost() & ( port == -1 ? "" : ":" & port );
+            var robotsUrl = urlObj.getProtocol() & "://" & authority & variables.robotsBasePath & "robots.txt";
+            try {
+                robotsContent = browser.getText( robotsUrl );
+                logger.info( "Loaded robots.txt from #robotsUrl#" );
+            } catch ( any e ) {
+                // 404, timeout, or any fetch error -> crawl everything.
+                logger.info( "No usable robots.txt at #robotsUrl# (#e.message#); allowing all URLs" );
+                robotsContent = "";
+            }
+        }
+
+        robotsParser.parse( robotsContent, settings.userAgent );
+        variables.effectiveCrawlDelay = min( robotsParser.getCrawlDelay(), settings.maxCrawlDelay );
     }
 
     /**
@@ -96,6 +147,50 @@ component accessors=true hint="Handles crawling of website URLs" {
      */
     private boolean function isValidUrl( required string url ) {
         return parser.isUrlAllowed( arguments.url ) && !isUrlExcluded( arguments.url );
+    }
+
+    /**
+     * Decides whether a URL should be enqueued, and records the reason when not.
+     * @url The URL to check
+     *
+     * A URL is enqueued only when it is a valid crawlable URL (isValidUrl) and
+     * robots.txt allows it. A URL that is valid but robots-disallowed is added to
+     * the disallowedUrls set so the caller can see what robots blocked. This is
+     * the single gate the seed loop and the link loop both call, so a disallowed
+     * URL is recorded once per crawl (the set de-duplicates repeats).
+     */
+    private boolean function shouldEnqueue( required string url ) {
+        if ( !isValidUrl( arguments.url ) ) {
+            return false;
+        }
+        if ( !isAllowedByRobots( arguments.url ) ) {
+            appendDisallowedUrl( arguments.url );
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Checks robots.txt for a URL by matching its path relative to the crawl base.
+     * @url The URL to check
+     *
+     * Converts the URL to a site-root-relative path (its path with robotsBasePath
+     * removed and a leading "/" restored), then asks the RobotsParser. A URL whose
+     * path does not sit under the base is checked by its full path. When
+     * respectRobotsTxt is false, the rule set is empty so this always returns true.
+     */
+    private boolean function isAllowedByRobots( required string url ) {
+        try {
+            var urlPath = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.url ) ).getPath();
+        } catch ( any e ) {
+            // A URL java.net.URL cannot parse is left to the other filters; treat
+            // it as allowed here rather than throwing from the enqueue path.
+            return true;
+        }
+        var relativePath = urlPath.startsWith( variables.robotsBasePath )
+            ? "/" & urlPath.substring( len( variables.robotsBasePath ) )
+            : urlPath;
+        return robotsParser.isPathAllowed( relativePath );
     }
 
     /**
@@ -138,6 +233,14 @@ component accessors=true hint="Handles crawling of website URLs" {
 
         // always add the normalized url to the processed list
         appendProcessedUrl( normalizedUrl );
+
+        // Honor the robots.txt Crawl-delay: wait between fetches, but not before
+        // the first one. Applied here (right before the fetch) rather than per
+        // loop iteration, so items that return early above do not trigger a wait.
+        if ( variables.effectiveCrawlDelay > 0 && variables.hasFetched ) {
+            sleep( variables.effectiveCrawlDelay * 1000 );
+        }
+        variables.hasFetched = true;
 
         // Fetch the url.
         try {
@@ -186,6 +289,13 @@ component accessors=true hint="Handles crawling of website URLs" {
                 return;
             }
 
+            // if robots.txt disallows the canonical URL, skip and record it
+            if ( !isAllowedByRobots( canonicalUrl ) ) {
+                logger.info( "Canonical URL disallowed by robots.txt: #canonicalUrl# for #normalizedUrl#" );
+                appendDisallowedUrl( canonicalUrl );
+                return;
+            }
+
             // if the canonical URL is already processed, skip it.
             // we only make this check if the canonical URL is different from the normalized URL
             if ( isUrlProcessed( canonicalUrl ) ) {
@@ -208,7 +318,7 @@ component accessors=true hint="Handles crawling of website URLs" {
 
         // loop through the links and enqueue
         for ( var link in links ) {
-            if ( isValidUrl( link ) ) {
+            if ( shouldEnqueue( link ) ) {
                 enqueue( link, depth + 1 );
             }
         }
@@ -310,6 +420,15 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.badUrls[ arguments.url ] = {
             "message": arguments.message
         };
+    }
+
+    /**
+     * Records a URL skipped because robots.txt disallows it, by adding it to the
+     * disallowedUrls set (so repeats from multiple pages are recorded once).
+     * @url The disallowed URL
+     */
+    private void function appendDisallowedUrl( required string url ) {
+        variables.disallowedUrls[ arguments.url ] = true;
     }
 
 }

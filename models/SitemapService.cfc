@@ -45,7 +45,8 @@ component
             "sitemap": sitemapXml,
             "duration": getTickCount() - start,
             "processedUrls": result.processedUrls,
-            "badUrls": result.badUrls
+            "badUrls": result.badUrls,
+            "disallowedUrls": result.disallowedUrls
         };
     }
 

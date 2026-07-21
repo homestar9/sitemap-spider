@@ -31,6 +31,9 @@ component {
             browserDsl : "Jsoup@sitemap-spider",
             maxDepth : 10,
             maxPages : 1000,
+            respectRobotsTxt : true, // fetch and honor robots.txt Disallow/Allow rules
+            userAgent : "sitemap-spider", // matched against robots User-agent groups and sent on fetches
+            maxCrawlDelay : 10, // cap (seconds) on the robots Crawl-delay actually applied between fetches
             notAllowedPattern : "\.(png|webp|svg|gif|js|css|jpg|jpeg)$|javascript:|mailto:|tel:",
             priority : 1.0,
             priorityDecrement : 0.1, // each depth reduces priority by this much

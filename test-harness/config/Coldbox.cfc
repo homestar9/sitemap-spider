@@ -48,6 +48,15 @@
 			exclude = []
 		};
 
+		// Override module settings for the test run. maxCrawlDelay = 0 caps the
+		// robots.txt Crawl-delay to 0 so the integration crawl does not sleep 2s
+		// per page (the sample robots.txt declares Crawl-delay: 2). robots parsing
+		// and the Disallow rule are still exercised; the delay math is unit-tested
+		// in RobotsParserSpec.
+		moduleSettings = {
+			"sitemap-spider" : { maxCrawlDelay : 0 }
+		};
+
 		//Register interceptors as an array, we need order
 		interceptors = [
 		];
