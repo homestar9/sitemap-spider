@@ -12,7 +12,11 @@
  * resolution, duplicate removal, notAllowedPattern rejection) and isNoFollow()
  * (single- and multi-value rel attributes).
  *
- * cleanUrl() and isNoFollow() are private, exposed here with TestBox makePublic().
+ * Task 06 makes Parser the single owner of the URL-allowance rule, so the
+ * isUrlAllowed() coverage moved here from CrawlerSpec.
+ *
+ * cleanUrl() and isUrlAllowed() are public; isNoFollow() is private and exposed
+ * here with TestBox makePublic().
  *
  * Local run recipe:
  *   1. box server start serverConfigFile=server-adobe@2023.json
@@ -26,9 +30,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		variables.parser = getInstance( "Parser@sitemap-spider" );
 		variables.jsoup  = getInstance( "javaloader:org.jsoup.Jsoup" );
-		makePublic( variables.parser, "cleanUrl" );
+		// cleanUrl() and isUrlAllowed() are public (task 06 made Parser the single
+		// owner of both). isNoFollow() is still private, so expose it here.
 		makePublic( variables.parser, "isNoFollow" );
-		// getLinks()/isNoFollow() filter by host, so set the host the fixtures use.
+		// getLinks()/isNoFollow()/isUrlAllowed() filter by host, so set the host
+		// the fixtures use.
 		variables.parser.setHostName( "example.test" );
 	}
 
@@ -76,6 +82,28 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				it( "converts backslashes to forward slashes", function(){
 					expect( variables.parser.cleanUrl( "http:\\example.test\a.cfm" ) )
 						.toBe( "http://example.test/a.cfm" );
+				} );
+
+			} );
+
+			describe( "isUrlAllowed()", function(){
+
+				// Moved from CrawlerSpec in task 06: Parser is now the single owner of
+				// the URL-allowance rule and the Crawler delegates to it. The host is
+				// set to example.test in beforeAll, which isUrlAllowed() checks.
+
+				it( "allows a normal .cfm page URL on the host", function(){
+					expect( variables.parser.isUrlAllowed( "http://example.test/contact.cfm" ) ).toBeTrue();
+				} );
+
+				it( "rejects image, mailto, and tel URLs", function(){
+					expect( variables.parser.isUrlAllowed( "http://example.test/assets/img/sample.jpg" ) ).toBeFalse();
+					expect( variables.parser.isUrlAllowed( "mailto:support@example.test" ) ).toBeFalse();
+					expect( variables.parser.isUrlAllowed( "tel:+18005551212" ) ).toBeFalse();
+				} );
+
+				it( "rejects an off-host URL", function(){
+					expect( variables.parser.isUrlAllowed( "http://other.test/contact.cfm" ) ).toBeFalse();
 				} );
 
 			} );

@@ -20,13 +20,11 @@ component
      * Creates a sitemap starting from one or more URLs
      * 
      * @url A single URL (string) or array of URLs to start crawling
-     * @runAsync Whether to run the crawler asynchronously
      * @return A struct containing the crawled pages, sitemap XML, and duration
      */
     struct function create(
         required any url, // String or array of strings
-        array excludeUrls = [], // Array of URLs to exclude from crawling
-        boolean runAsync = settings.runAsync
+        array excludeUrls = [] // Array of URLs to exclude from crawling
     ) {
         var start = getTickCount();
 
@@ -36,8 +34,7 @@ component
         // Crawl the site and populate pages
         var result = crawler.crawl(
             urls = urlArray,
-            excludeUrls = arguments.excludeUrls, 
-            runAsync = arguments.runAsync 
+            excludeUrls = arguments.excludeUrls
         );
 
         // Generate sitemap XML

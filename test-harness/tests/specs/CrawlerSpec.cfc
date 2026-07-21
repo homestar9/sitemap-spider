@@ -2,14 +2,16 @@
  * Unit specs for Crawler.cfc.
  *
  * Two parts:
- *   1. Regression specs for the task 03 correctness fixes (getPriority floor,
- *      isUrlAllowed no longer inverts its reMatch arguments).
+ *   1. Regression spec for the task 03 getPriority floor fix.
  *   2. Task 05 behavior specs for crawl() driven by a fake browser, so a full
  *      breadth-first crawl runs with no real HTTP.
  *
- * getPriority() and isUrlAllowed() are private, exposed here with makePublic().
- * The fake browser is injected with MockBox $property after onDiComplete has
- * already set variables.browser, so no production change is needed.
+ * The URL-allowance rule moved to Parser in task 06 (Crawler now delegates to
+ * parser.isUrlAllowed), so its regression coverage lives in ParserSpec.
+ *
+ * getPriority() is private, exposed here with makePublic(). The fake browser is
+ * injected with MockBox $property after onDiComplete has already set
+ * variables.browser, so no production change is needed.
  *
  * Local run recipe:
  *   1. box server start serverConfigFile=server-adobe@2023.json
@@ -25,9 +27,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		setup();
 
 		variables.crawler = getInstance( "Crawler@sitemap-spider" );
-		// Expose the private methods under test.
+		// Expose the private method under test.
 		makePublic( variables.crawler, "getPriority" );
-		makePublic( variables.crawler, "isUrlAllowed" );
 	}
 
 	function afterAll(){
@@ -81,20 +82,6 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			} );
 
-			describe( "isUrlAllowed()", function(){
-
-				it( "allows a normal .cfm page URL", function(){
-					expect( variables.crawler.isUrlAllowed( "http://example.test/contact.cfm" ) ).toBeTrue();
-				} );
-
-				it( "rejects image, mailto, and tel URLs", function(){
-					expect( variables.crawler.isUrlAllowed( "http://example.test/assets/img/sample.jpg" ) ).toBeFalse();
-					expect( variables.crawler.isUrlAllowed( "mailto:support@example.test" ) ).toBeFalse();
-					expect( variables.crawler.isUrlAllowed( "tel:+18005551212" ) ).toBeFalse();
-				} );
-
-			} );
-
 		} );
 
 		describe( "crawl() with a fake browser", function(){
@@ -111,7 +98,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				ctx.fake.addPage( bUrl, "" );
 				ctx.fake.addPage( cUrl, "" );
 
-				ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = false );
+				ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
 				var order = ctx.fake.getRequestedUrls();
 				expect( order.len() ).toBe( 4 );
@@ -131,7 +118,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				ctx.fake.addPage( aUrl, link( bUrl ) );
 				ctx.fake.addPage( bUrl, "" );
 
-				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = false );
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
 				expect( result.pages ).toHaveKey( variables.root );
 				expect( result.pages ).toHaveKey( aUrl );
@@ -153,13 +140,12 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				}
 				ctx.fake.addPage( variables.root, body );
 
-				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = false );
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
-				// The cutoff engaged: fewer than all five pages were recorded, and at
-				// least maxPages made it in. The exact count is maxPages + 1 because
-				// crawlUrl checks structCount > maxPages before appending.
-				expect( structCount( result.pages ) ).toBeLT( 5 );
-				expect( structCount( result.pages ) ).toBeGTE( 2 );
+				// The cutoff engaged: exactly maxPages pages were recorded, not all
+				// five (root + four). Task 06 made the bound exact: crawlUrl checks
+				// structCount >= maxPages before appending, so the count is maxPages.
+				expect( structCount( result.pages ) ).toBe( 2 );
 			} );
 
 			it( "records a page under its canonical URL, not the fetched URL", function(){
@@ -174,7 +160,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					'<html><head><link rel="canonical" href="#aboutCanonical#"></head><body></body></html>'
 				);
 
-				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = false );
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
 				expect( result.pages ).toHaveKey( aboutCanonical );
 				expect( result.pages ).notToHaveKey( aboutIndex );
@@ -191,7 +177,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				ctx.fake.addPage( goodUrl, "" );
 				ctx.fake.failOn( badUrl, "boom" );
 
-				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = false );
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
 				expect( result.badUrls ).toHaveKey( badUrl );
 				expect( result.badUrls[ badUrl ] ).toHaveKey( "message" );
@@ -208,7 +194,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				ctx.fake.addPage( keepUrl, "" );
 				ctx.fake.addPage( dropUrl, "" );
 
-				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [ dropUrl ], runAsync = false );
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [ dropUrl ] );
 
 				expect( ctx.fake.getRequestedUrls().findNoCase( dropUrl ) ).toBe( 0 );
 				expect( result.pages ).notToHaveKey( dropUrl );

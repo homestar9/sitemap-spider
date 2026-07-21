@@ -79,16 +79,22 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Cleans a URL by removing unwanted characters
+     * Cleans and normalizes a URL string.
      * @url The URL to clean
+     *
+     * This is the single owner of URL-string normalization; the Crawler calls it
+     * too (it replaced Crawler.normalizeUrl). It trims the ends, converts
+     * backslashes to forward slashes, encodes interior spaces as %20, collapses
+     * repeated slashes after the protocol, and strips the fragment.
+     *
+     * Encoding " " as "%20" after trimming never touches an existing %20, so an
+     * already-encoded URL is preserved. The steps are idempotent, so calling
+     * cleanUrl again on an already-cleaned URL returns the same string.
      */
-    private string function cleanUrl( required string url ) {
-        // Overlaps Crawler.normalizeUrl(); consolidate the two in task 06.
-        // Trim the ends, then encode interior spaces as %20 rather than deleting
-        // them. Replacing " " with "%20" after trim never touches an existing
-        // %20, so an already-encoded URL is preserved.
+    string function cleanUrl( required string url ) {
         var cleaned = trim( arguments.url );          // drop leading/trailing whitespace
         cleaned = cleaned.replace( "\", "/", "all" ); // backslash -> forward slash
+        cleaned = reReplace( cleaned, "^(https?://[^/]+)//+", "\1/", "ALL" ); // collapse double slashes after protocol
         cleaned = cleaned.replace( " ", "%20", "all" ); // encode interior spaces
         // Remove the fragment, including the "#" itself (e.g., "page#anchor" -> "page")
         var fragmentIndex = cleaned.find( "##" );
@@ -101,8 +107,14 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     /**
      * Checks if a URL is allowed based on settings
      * @url The URL to check
+     *
+     * This is the single owner of the "is this a crawlable URL for our host?"
+     * rule; the Crawler delegates to it (it replaced Crawler.isUrlAllowed and
+     * Crawler.isUrlHostMatch). A URL is allowed when it has a value, uses the
+     * http or https protocol, its host matches variables.hostName, and it does
+     * not match settings.notAllowedPattern (images, css/js, mailto:, tel:, etc.).
      */
-    private boolean function isUrlAllowed( required string url ) {
+    boolean function isUrlAllowed( required string url ) {
         if ( !len( arguments.url ) ) {
             return false;
         }
