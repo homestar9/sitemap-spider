@@ -8,7 +8,11 @@
  *     entry anywhere in a single- or multi-relation Link header, quoted or unquoted.
  *   - getLastModified() accepts the optional second parsedPage argument.
  *
- * cleanUrl() is private, exposed here with TestBox makePublic().
+ * Task 05 adds coverage for getLinks() (nofollow filtering, relative-href
+ * resolution, duplicate removal, notAllowedPattern rejection) and isNoFollow()
+ * (single- and multi-value rel attributes).
+ *
+ * cleanUrl() and isNoFollow() are private, exposed here with TestBox makePublic().
  *
  * Local run recipe:
  *   1. box server start serverConfigFile=server-adobe@2023.json
@@ -21,11 +25,26 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		setup();
 
 		variables.parser = getInstance( "Parser@sitemap-spider" );
+		variables.jsoup  = getInstance( "javaloader:org.jsoup.Jsoup" );
 		makePublic( variables.parser, "cleanUrl" );
+		makePublic( variables.parser, "isNoFollow" );
+		// getLinks()/isNoFollow() filter by host, so set the host the fixtures use.
+		variables.parser.setHostName( "example.test" );
 	}
 
 	function afterAll(){
 		super.afterAll();
+	}
+
+	// Parses html with an explicit base URI so jsoup's abs:href resolves relative
+	// hrefs. parser.parseHtml() sets no base URI, so it cannot be used here.
+	private any function parseWithBase( required string html, required string baseUri ){
+		return variables.jsoup.parse( arguments.html, arguments.baseUri );
+	}
+
+	// Parses an anchor tag and returns its jsoup element, for isNoFollow() tests.
+	private any function anchor( required string tag ){
+		return variables.jsoup.parse( arguments.tag ).select( "a" ).first();
 	}
 
 	function run(){
@@ -107,6 +126,76 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				it( "returns empty when there is no Last-Modified header", function(){
 					var fetchResult = { headers : {} };
 					expect( variables.parser.getLastModified( fetchResult ) ).toBe( "" );
+				} );
+
+			} );
+
+			describe( "getLinks()", function(){
+
+				it( "resolves a relative href to an absolute URL", function(){
+					var page = parseWithBase(
+						'<a href="page.cfm">link</a>',
+						"http://example.test/dir/"
+					);
+					expect( variables.parser.getLinks( page ) ).toInclude( "http://example.test/dir/page.cfm" );
+				} );
+
+				it( "drops a link marked rel=nofollow", function(){
+					var page = parseWithBase(
+						'<a href="http://example.test/keep.cfm">keep</a>'
+						& '<a href="http://example.test/skip.cfm" rel="nofollow">skip</a>',
+						"http://example.test/"
+					);
+					var links = variables.parser.getLinks( page );
+					expect( links ).toInclude( "http://example.test/keep.cfm" );
+					expect( links.findNoCase( "http://example.test/skip.cfm" ) ).toBe( 0 );
+				} );
+
+				it( "returns a duplicated href only once", function(){
+					var page = parseWithBase(
+						'<a href="http://example.test/dup.cfm">one</a>'
+						& '<a href="http://example.test/dup.cfm">two</a>',
+						"http://example.test/"
+					);
+					var links = variables.parser.getLinks( page );
+					var occurrences = 0;
+					for ( var url in links ) {
+						if ( url == "http://example.test/dup.cfm" ) {
+							occurrences++;
+						}
+					}
+					expect( occurrences ).toBe( 1 );
+				} );
+
+				it( "drops image and off-host links", function(){
+					var page = parseWithBase(
+						'<a href="http://example.test/pic.jpg">image</a>'
+						& '<a href="http://other.test/x.cfm">other host</a>',
+						"http://example.test/"
+					);
+					var links = variables.parser.getLinks( page );
+					expect( links.findNoCase( "http://example.test/pic.jpg" ) ).toBe( 0 );
+					expect( links.findNoCase( "http://other.test/x.cfm" ) ).toBe( 0 );
+				} );
+
+			} );
+
+			describe( "isNoFollow()", function(){
+
+				it( "is true for rel=nofollow", function(){
+					expect( variables.parser.isNoFollow( anchor( '<a href="/x" rel="nofollow">x</a>' ) ) ).toBeTrue();
+				} );
+
+				it( "is true when nofollow is one of several rel values", function(){
+					expect( variables.parser.isNoFollow( anchor( '<a href="/x" rel="external nofollow">x</a>' ) ) ).toBeTrue();
+				} );
+
+				it( "is false for a non-nofollow rel value", function(){
+					expect( variables.parser.isNoFollow( anchor( '<a href="/x" rel="noopener">x</a>' ) ) ).toBeFalse();
+				} );
+
+				it( "is false when there is no rel attribute", function(){
+					expect( variables.parser.isNoFollow( anchor( '<a href="/x">x</a>' ) ) ).toBeFalse();
 				} );
 
 			} );
