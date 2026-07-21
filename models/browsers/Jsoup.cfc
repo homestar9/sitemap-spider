@@ -16,6 +16,11 @@ component
             .userAgent( settings.userAgent )
             .timeout( settings.requestTimeout )
             .ignoreContentType( true ) // otherise only HTML is allowed
+            // Cap how many bytes jsoup reads. ignoreContentType( true ) means a
+            // non-HTML body (a PDF or image that slips past notAllowedPattern)
+            // would otherwise be pulled in full. maxBodySize bounds that. Trade-off:
+            // an HTML page larger than the cap is truncated before parsing.
+            .maxBodySize( settings.maxBodySize )
             .ignoreHttpErrors( true )
             .execute();
 
@@ -24,8 +29,7 @@ component
             throw(
                 message = "Failed to fetch #arguments.url# HTTP request returned status code #response.statusCode()#",
                 type = "StatusCodeException"
-            )
-            return;
+            );
         }
 
         // Convert headers to CF struct. Use multiHeaders() (Map<String,List<String>>)
@@ -55,24 +59,19 @@ component
             cfHeaders[ key ] = joined;
         }
 
-        // Check content type
-        var contentType = response.contentType();
-        var result = {
-            // response.url() is the final URL after jsoup follows any HTTP 30x
-            // (followRedirects defaults to true). It may differ from the requested
-            // arguments.url. response.url() returns a java.net.URL, so toString()
-            // makes it a CFML string.
+        // Build the shared result shape. BaseBrowser.buildResult adds the body
+        // under "html" only for HTML/XHTML content types.
+        //
+        // response.url() is the final URL after jsoup follows any HTTP 30x
+        // (followRedirects defaults to true). It may differ from the requested
+        // arguments.url. response.url() returns a java.net.URL, so toString()
+        // makes it a CFML string.
+        return buildResult(
             url = response.url().toString(),
             headers = cfHeaders,
-            contentType = contentType
-        };
-
-        // Only include body for HTML or XHTML content
-        if ( isHtmlContentType( contentType ) ) {
-            result.html = response.body(); // send back raw HTML content
-        }
-
-        return result;
+            contentType = response.contentType(),
+            body = response.body()
+        );
     }
 
     /**

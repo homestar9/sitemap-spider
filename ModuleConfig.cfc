@@ -38,6 +38,13 @@ component {
             priority : 1.0,
             priorityDecrement : 0.1, // each depth reduces priority by this much
             requestTimeout : 10000, // ms
+            maxBodySize : 5242880, // 5 MB cap on the response body jsoup downloads
+            // Playwright backend only: how long to wait for JS after navigation.
+            // waitStrategy is a page load state ("load" or "networkidle");
+            // waitMs is an extra fixed wait (ms) applied after, needed for content
+            // injected by a setTimeout with no network activity.
+            waitStrategy : "networkidle",
+            waitMs : 0,
             htmlContentTypePattern : "^(text/html|application/xhtml\+xml)(;.*)?$", // check for links + canonical URLs
             // Unanchored so it matches a canonical entry inside a multi-relation Link
             // header; the optional quotes accept rel=canonical and rel="canonical".
