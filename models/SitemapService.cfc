@@ -29,14 +29,23 @@ component
      * @publicBaseUrl Absolute URL prefix the child sitemaps are served from, used
      *   for the <sitemapindex> <loc> entries (only relevant when splitting). When
      *   empty, it is derived from the first start URL's directory.
+     * @runAsync When true, crawl URLs on several worker threads. Defaults to the
+     *   module's runAsync setting. The crawler only honors it when there is no
+     *   robots Crawl-delay and the browser backend is parallel-safe; otherwise the
+     *   crawl runs single-threaded. The returned struct's runAsync key reports
+     *   whether the crawl actually ran in parallel.
      * @return A struct containing the crawled pages, sitemap XML, and duration
      */
     struct function create(
         required any url, // String or array of strings
         array excludeUrls = [], // Array of URLs to exclude from crawling
         string filePath = "", // Optional file path to save the sitemap XML to
-        string publicBaseUrl = "" // Absolute URL prefix for <sitemapindex> entries
+        string publicBaseUrl = "", // Absolute URL prefix for <sitemapindex> entries
+        boolean runAsync // Defaults to settings.runAsync below
     ) {
+        // Default runAsync to the module setting when the caller did not pass it.
+        param name="arguments.runAsync" default="#settings.runAsync#";
+
         var start = getTickCount();
 
         // Normalize url to an array
@@ -45,7 +54,8 @@ component
         // Crawl the site and populate pages
         var result = crawler.crawl(
             urls = urlArray,
-            excludeUrls = arguments.excludeUrls
+            excludeUrls = arguments.excludeUrls,
+            runAsync = arguments.runAsync
         );
 
         // The absolute URL prefix the child sitemaps are served from. Prefer the
@@ -108,6 +118,7 @@ component
             "processedUrls": result.processedUrls,
             "badUrls": result.badUrls,
             "disallowedUrls": result.disallowedUrls,
+            "runAsync": result.runAsync,
             "filePath": arguments.filePath,
             "saved": saved
         };

@@ -226,6 +226,41 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 		} );
+
+		describe( "async parallel crawl", function(){
+
+			// The shared beforeAll crawl (variables.result) is synchronous. Crawl
+			// the same sample site in parallel and assert it discovers the exact
+			// same pages, bad URLs, and disallowed URLs. Assertions are on the
+			// sorted key sets, not visit order, because parallel order is not
+			// deterministic. The test harness sets maxCrawlDelay = 0, so the
+			// sample robots.txt Crawl-delay does not force the crawl back to sync.
+			it( "finds the same pages as the synchronous crawl", function(){
+				var async = getInstance( "sitemapService@sitemap-spider" )
+					.create( url = variables.appRoot, runAsync = true );
+
+				expect( async.runAsync ).toBeTrue();
+				expect( structKeyArray( async.pages ).sort( "textnocase" ) )
+					.toBe( structKeyArray( variables.result.pages ).sort( "textnocase" ) );
+				expect( structKeyArray( async.badUrls ).sort( "textnocase" ) )
+					.toBe( structKeyArray( variables.result.badUrls ).sort( "textnocase" ) );
+				expect( async.disallowedUrls.sort( "textnocase" ) )
+					.toBe( variables.result.disallowedUrls.sort( "textnocase" ) );
+			} );
+
+			// A race that only sometimes surfaces would make the recorded page set
+			// vary between runs. Crawl a few times and assert every run produces the
+			// same set, so a nondeterministic claim/counter bug fails the suite.
+			it( "produces a stable page set across repeated parallel crawls", function(){
+				var expected = structKeyArray( variables.result.pages ).sort( "textnocase" );
+				for ( var i = 1; i <= 3; i++ ){
+					var async = getInstance( "sitemapService@sitemap-spider" )
+						.create( url = variables.appRoot, runAsync = true );
+					expect( structKeyArray( async.pages ).sort( "textnocase" ) ).toBe( expected );
+				}
+			} );
+
+		} );
 	}
 
 }

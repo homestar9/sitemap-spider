@@ -42,4 +42,18 @@ interface {
      */
     void function shutdown();
 
+    /**
+     * Reports whether this backend is safe to call from several crawl worker
+     * threads at once.
+     *
+     * The Crawler only runs a parallel crawl when this returns true. A stateless
+     * backend that builds a fresh request per fetch (jsoup) is safe and returns
+     * true; a backend that reuses one shared browser page/context per crawl
+     * (Playwright) is not thread-safe and returns false, so a parallel crawl with
+     * that backend falls back to single-threaded.
+     *
+     * @returns boolean
+     */
+    boolean function supportsParallel();
+
 }

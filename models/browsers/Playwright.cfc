@@ -128,6 +128,16 @@ component
     }
 
     /**
+     * Reports that this backend is not safe for parallel crawling. It reuses one
+     * shared browser page and context for the whole crawl (see getPage), and a
+     * Playwright page/context cannot be driven from several threads at once. The
+     * Crawler downgrades a runAsync crawl to single-threaded when this is false.
+     */
+    boolean function supportsParallel() {
+        return false;
+    }
+
+    /**
      * Returns the shared page, creating the Playwright instance, a headless
      * browser, a context, and one page on first use. All are reused for the whole
      * crawl; each fetch navigates the same page.

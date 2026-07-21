@@ -31,6 +31,12 @@ component {
             browserDsl : "Jsoup@sitemap-spider",
             maxDepth : 10,
             maxPages : 1000,
+            // Default crawl mode. false = single-threaded. When true, and the
+            // browser backend is parallel-safe and no robots Crawl-delay applies,
+            // the crawl fetches URLs on asyncMaxThreads worker threads. A caller
+            // can override this per crawl via SitemapService.create( runAsync = ).
+            runAsync : false,
+            asyncMaxThreads : 10, // worker count for a parallel crawl
             respectRobotsTxt : true, // fetch and honor robots.txt Disallow/Allow rules
             userAgent : "sitemap-spider", // matched against robots User-agent groups and sent on fetches
             maxCrawlDelay : 10, // cap (seconds) on the robots Crawl-delay actually applied between fetches

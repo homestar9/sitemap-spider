@@ -65,6 +65,21 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return '<a href="#arguments.url#">#arguments.url#</a>';
 	}
 
+	// Wires a fan-out graph on the fake browser: root links to every url in the
+	// list, and every page links back to the first url. The first url is therefore
+	// discovered from many pages at once, which stresses the parallel crawler's
+	// atomic claim (it must be recorded exactly once, not once per discovery).
+	private void function wireGraph( required any fake, required array urls ){
+		var body = "";
+		for ( var u in arguments.urls ){
+			body &= link( u );
+		}
+		arguments.fake.addPage( variables.root, body );
+		for ( var u in arguments.urls ){
+			arguments.fake.addPage( u, link( arguments.urls[ 1 ] ) );
+		}
+	}
+
 	function run(){
 		describe( "Crawler correctness fixes", function(){
 
@@ -238,6 +253,70 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				expect( ctx.fake.getRequestedUrls().findNoCase( dropUrl ) ).toBe( 0 );
 				expect( result.pages ).notToHaveKey( dropUrl );
 				expect( result.pages ).toHaveKey( keepUrl );
+			} );
+
+		} );
+
+		describe( "crawl() in parallel (runAsync=true)", function(){
+
+			// Wire a wider fan-out graph than the sample site so the parallel
+			// claim is exercised on many URLs discovered at once. Crawl it once
+			// synchronously and once in parallel and assert the recorded page set
+			// matches, regardless of the (now nondeterministic) visit order.
+			it( "records the same pages as a synchronous crawl, regardless of order", function(){
+				var linked = [];
+				for ( var i = 1; i <= 8; i++ ){
+					linked.append( variables.root & "p#i#.cfm" );
+				}
+
+				var syncCtx = buildCrawler();
+				wireGraph( syncCtx.fake, linked );
+				var syncResult = syncCtx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				var asyncCtx = buildCrawler();
+				wireGraph( asyncCtx.fake, linked );
+				var asyncResult = asyncCtx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
+
+				// The crawl actually ran in parallel (no Crawl-delay, parallel-safe fake).
+				expect( asyncResult.runAsync ).toBeTrue();
+				// root + p1..p8 = 9 pages, recorded once each despite p1 being
+				// linked back to from every page.
+				expect( structCount( asyncResult.pages ) ).toBe( 9 );
+				expect( structKeyArray( asyncResult.pages ).sort( "textnocase" ) )
+					.toBe( structKeyArray( syncResult.pages ).sort( "textnocase" ) );
+				expect( asyncResult.badUrls ).toBeEmpty();
+			} );
+
+			it( "records a fetch failure in badUrls under parallel crawling", function(){
+				var goodUrl = variables.root & "a.cfm";
+				var badUrl  = variables.root & "b.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( goodUrl ) & link( badUrl ) );
+				ctx.fake.addPage( goodUrl, "" );
+				ctx.fake.failOn( badUrl, "boom" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
+
+				expect( result.runAsync ).toBeTrue();
+				expect( result.badUrls ).toHaveKey( badUrl );
+				expect( result.pages ).toHaveKey( goodUrl );
+				expect( result.pages ).notToHaveKey( badUrl );
+			} );
+
+			it( "runs synchronously when robots.txt sets a Crawl-delay, even with runAsync=true", function(){
+				// maxCrawlDelay is overridden above 0 so the robots Crawl-delay is
+				// actually applied (the test harness pins it to 0 otherwise).
+				var ctx = buildCrawler( { maxCrawlDelay : 10 } );
+				ctx.fake.setRobots( "User-agent: *" & chr( 10 ) & "Crawl-delay: 5" );
+				ctx.fake.addPage( variables.root, "" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
+
+				// A Crawl-delay forces single-threaded so the delay is honored
+				// between fetches; parallel fetching would defeat it.
+				expect( result.runAsync ).toBeFalse();
+				expect( result.pages ).toHaveKey( variables.root );
 			} );
 
 		} );

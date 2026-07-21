@@ -41,6 +41,13 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.robotsBasePath = "/"; // site-root path the seed URL lives under
         variables.effectiveCrawlDelay = 0; // seconds to wait between fetches (capped)
         variables.hasFetched = false; // becomes true after the first fetch, so the delay is not applied before it
+        // Crawl mode for this run. crawl() sets it true only when the caller asked
+        // for async AND it is safe (no Crawl-delay, parallel-safe backend). The
+        // state-touching helpers below branch on it: false uses the CFML structs
+        // above, true uses the java.util.concurrent containers built by
+        // initAsyncState(). Reset to false here so a sync crawl after an async one
+        // does not read the previous run's Java containers.
+        variables.async = false;
     }
 
     function onDiComplete() {
@@ -56,14 +63,20 @@ component accessors=true hint="Handles crawling of website URLs" {
      * Crawls a website starting from one or more URLs
      * @urls An array of URLs to start crawling
      * @excludeUrls An array of URLs to exclude from crawling
+     * @runAsync When true, fetch URLs on several worker threads instead of one.
+     *           Only honored when the crawl has no robots Crawl-delay and the
+     *           browser backend reports supportsParallel(); otherwise the crawl
+     *           runs single-threaded (a downgrade is logged).
      * @return A struct with the crawled pages, bad URLs, and processed URLs.
      *         processedUrls is returned as an array (via structKeyArray) even
      *         though it is tracked internally as a set, so callers keep a simple
-     *         list shape.
+     *         list shape. A runAsync key reports whether the crawl actually ran
+     *         in parallel.
      */
     struct function crawl(
         required array urls,
-        required array excludeUrls
+        required array excludeUrls,
+        boolean runAsync = false
     ) {
 
         // Clear any state from a prior crawl on this instance (WireBox may return a
@@ -81,10 +94,33 @@ component accessors=true hint="Handles crawling of website URLs" {
         // effective crawl delay used below.
         loadRobots( arguments.urls[ 1 ] );
 
-        // Turn the excluded-URL array into a set for O(1) membership checks.
+        // Turn the excluded-URL array into a set for O(1) membership checks. This
+        // set is read-only once the crawl starts, so it stays a plain CFML struct
+        // even in async mode (concurrent reads are safe).
         variables.excludeUrls = {};
         for ( var excluded in arguments.excludeUrls ) {
             variables.excludeUrls[ excluded ] = true;
+        }
+
+        // Decide whether this crawl runs in parallel. Async is honored only when
+        // the caller asked for it AND there is no robots Crawl-delay to respect
+        // (parallel fetching and a politeness delay are contradictory) AND the
+        // browser backend is thread-safe. When any of those fails, run sync.
+        variables.async = arguments.runAsync
+            && variables.effectiveCrawlDelay == 0
+            && browser.supportsParallel();
+
+        if ( arguments.runAsync && !variables.async ) {
+            logger.info(
+                "runAsync requested but running single-threaded: "
+                & ( variables.effectiveCrawlDelay > 0 ? "a robots Crawl-delay is in effect" : "the browser backend is not parallel-safe" )
+            );
+        }
+
+        // In async mode, replace the CFML struct/array state with thread-safe
+        // java.util.concurrent containers before any URL is enqueued.
+        if ( variables.async ) {
+            initAsyncState();
         }
 
         // Enqueue valid URLs
@@ -99,25 +135,23 @@ component accessors=true hint="Handles crawling of website URLs" {
             }
         } );
 
-        // Synchronous breadth-first crawl. v1 is single-threaded; task 14
-        // reintroduces parallelism with proper locking. The finally releases any
-        // resources the browser holds for this crawl (the Playwright backend
-        // closes its browser process here; the Jsoup backend's shutdown is a
-        // no-op), even if a fetch throws out of the loop.
+        // Drain the frontier. The finally releases any resources the browser holds
+        // for this crawl (the Playwright backend closes its browser process here;
+        // the Jsoup backend's shutdown is a no-op), even if a fetch throws out of
+        // the loop, and in async mode only after every worker has finished.
         try {
-            while ( variables.queue.len( ) ) {
-                runQueueItem();
+            if ( variables.async ) {
+                runAsyncCrawl();
+            } else {
+                while ( variables.queue.len( ) ) {
+                    runQueueItem();
+                }
             }
         } finally {
             browser.shutdown();
         }
 
-        return {
-            "pages": variables.pages,
-            "badUrls": variables.badUrls,
-            "processedUrls": structKeyArray( variables.processedUrls ),
-            "disallowedUrls": structKeyArray( variables.disallowedUrls )
-        };
+        return buildCrawlResult();
     }
 
     /**
@@ -235,7 +269,7 @@ component accessors=true hint="Handles crawling of website URLs" {
     private void function crawlUrl( required string url, required numeric depth ) {
         if (
             depth > settings.maxDepth ||
-            structCount( variables.pages ) >= settings.maxPages
+            atMaxPages()
         ) {
             return;
         }
@@ -248,15 +282,15 @@ component accessors=true hint="Handles crawling of website URLs" {
             return;
         }
 
-        // Check if URL was already processed
-        if ( isUrlProcessed( normalizedUrl ) ) {
+        // Claim this URL as processed. claimProcessed marks it and returns false
+        // if another worker already did, in which case we stop so it is fetched
+        // once. In async mode the mark is atomic (putIfAbsent), which is what
+        // kills the old check-then-act race that let two threads fetch one URL.
+        if ( !claimProcessed( normalizedUrl ) ) {
             return;
         }
 
         logger.info( "Crawling #normalizedUrl# at depth #arguments.depth#" );
-
-        // always add the normalized url to the processed list
-        appendProcessedUrl( normalizedUrl );
 
         // Honor the robots.txt Crawl-delay: wait between fetches, but not before
         // the first one. Applied here (right before the fetch) rather than per
@@ -384,46 +418,82 @@ component accessors=true hint="Handles crawling of website URLs" {
             appendDisallowedUrl( arguments.effectiveUrl );
             return { "url": arguments.effectiveUrl, "skip": true };
         }
-        if ( isUrlProcessed( arguments.effectiveUrl ) ) {
+        // Claim the effective URL. If another worker already recorded it (or it
+        // was crawled directly), claimProcessed returns false and we skip so it
+        // is not recorded twice.
+        if ( !claimProcessed( arguments.effectiveUrl ) ) {
             logger.info( "Effective URL already processed: #arguments.effectiveUrl# for #arguments.normalizedUrl#" );
             return { "url": arguments.effectiveUrl, "skip": true };
         }
-        appendProcessedUrl( arguments.effectiveUrl );
         return { "url": arguments.effectiveUrl, "skip": false };
     }
 
+    /**
+     * Records a crawled page.
+     * @url The URL the page is stored under
+     * @lastModified A date object, or "" when unknown
+     * @priority The page priority
+     * @depth The crawl depth the page was found at
+     *
+     * Sync mode: stores the page directly. The maxPages cutoff is already applied
+     * by atMaxPages() at the top of crawlUrl, so the count stays exact.
+     *
+     * Async mode: reserves a slot with an atomic increment first. Several workers
+     * can pass the approximate atMaxPages() check at once, so the reservation is
+     * what actually caps the total: if the increment goes over maxPages the page
+     * is not recorded (and the reservation is released). This keeps the recorded
+     * count at most maxPages.
+     */
     private void function appendPage(
         required string url,
         required any lastModified, // a date object, or "" when unknown
         required numeric priority,
         required numeric depth
     ) {
-        variables.pages[ arguments.url ] = {
+        var page = {
             "lastModified": arguments.lastModified,
             "priority": arguments.priority,
             "depth": arguments.depth
+        };
+
+        if ( variables.async ) {
+            if ( variables.pageCount.incrementAndGet() > settings.maxPages ) {
+                variables.pageCount.decrementAndGet();
+                return;
+            }
+            variables.pages.put( arguments.url, page );
+            return;
         }
 
+        variables.pages[ arguments.url ] = page;
     }
 
     /**
-     * Records a URL as crawled by adding it to the processedUrls set.
-     * @url The URL to mark as processed
-     */
-    private void function appendProcessedUrl( required string url ) {
-        variables.processedUrls[ arguments.url ] = true;
-    }
-
-    /**
-     * Enqueues a URL for crawling
+     * Enqueues a URL for crawling.
      * @url The URL to enqueue
      * @depth The crawl depth
      *
-     * Adds the URL to both the ordered queue array and the queuedUrls set. The
-     * crawl is single-threaded, so no lock is needed. A URL is enqueued only if
-     * it is not already queued and has not already been processed.
+     * Sync mode: adds the URL to the ordered queue array and the queuedUrls set,
+     * only if it is not already queued and has not already been processed.
+     *
+     * Async mode: claims the URL atomically in the `seen` map. putIfAbsent returns
+     * null only for the first worker to add this URL, so exactly one worker
+     * enqueues it (the check-then-act race is impossible). The in-flight counter
+     * is incremented BEFORE the URL is put on the frontier, so a worker can never
+     * see the crawl as finished while this item exists but is not yet counted.
      */
     private void function enqueue( required string url, required numeric depth ) {
+        if ( variables.async ) {
+            if ( isNull( variables.seen.putIfAbsent( arguments.url, true ) ) ) {
+                variables.pending.incrementAndGet();
+                variables.frontier.put( {
+                    url = arguments.url,
+                    depth = arguments.depth
+                } );
+            }
+            return;
+        }
+
         if (
             !isUrlQueued( arguments.url ) &&
             !isUrlProcessed( arguments.url )
@@ -461,11 +531,15 @@ component accessors=true hint="Handles crawling of website URLs" {
     }
 
     /**
-     * Check if URL was already processed
+     * Check if URL was already processed. Reads the CFML struct in sync mode and
+     * the concurrent map in async mode. Only the sync enqueue path calls this; the
+     * async path claims through claimProcessed instead.
      * @url URL to check
      */
     private boolean function isUrlProcessed( required string url ) {
-        return variables.processedUrls.keyExists( arguments.url );
+        return variables.async
+            ? variables.processedUrls.containsKey( arguments.url )
+            : variables.processedUrls.keyExists( arguments.url );
     }
 
     /**
@@ -484,9 +558,12 @@ component accessors=true hint="Handles crawling of website URLs" {
     }
 
     private void function appendBadUrl( required string url, required string message ) {
-        variables.badUrls[ arguments.url ] = {
-            "message": arguments.message
-        };
+        var entry = { "message": arguments.message };
+        if ( variables.async ) {
+            variables.badUrls.put( arguments.url, entry );
+            return;
+        }
+        variables.badUrls[ arguments.url ] = entry;
     }
 
     /**
@@ -495,7 +572,183 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @url The disallowed URL
      */
     private void function appendDisallowedUrl( required string url ) {
+        if ( variables.async ) {
+            variables.disallowedUrls.put( arguments.url, true );
+            return;
+        }
         variables.disallowedUrls[ arguments.url ] = true;
+    }
+
+    /**
+     * Marks a URL as processed and reports whether this call was the one that
+     * claimed it. Returns true when the URL was not already processed (so the
+     * caller should crawl/record it), false when it was already claimed.
+     * @url The URL to claim
+     *
+     * In async mode the claim is a single atomic putIfAbsent on the concurrent
+     * map, so exactly one worker ever gets true for a given URL. In sync mode it
+     * is the plain check-then-set, which is safe on one thread.
+     */
+    private boolean function claimProcessed( required string url ) {
+        if ( variables.async ) {
+            return isNull( variables.processedUrls.putIfAbsent( arguments.url, true ) );
+        }
+        if ( variables.processedUrls.keyExists( arguments.url ) ) {
+            return false;
+        }
+        variables.processedUrls[ arguments.url ] = true;
+        return true;
+    }
+
+    /**
+     * Reports whether the crawl has reached the maxPages cap. In sync mode this is
+     * exact (the page struct is only added after this returns false). In async
+     * mode it reads the atomic page counter and is approximate — several workers
+     * can pass it at once — so appendPage does the exact reservation.
+     */
+    private boolean function atMaxPages() {
+        return variables.async
+            ? ( variables.pageCount.get() >= settings.maxPages )
+            : ( structCount( variables.pages ) >= settings.maxPages );
+    }
+
+    /**
+     * Builds the thread-safe java.util.concurrent containers used for a parallel
+     * crawl. Called from crawl() only when async is on, replacing the CFML
+     * structs/array set up by resetState(). The frontier is a blocking queue so
+     * idle workers wait for work without spinning; the maps use putIfAbsent for
+     * atomic claims; the two AtomicIntegers track in-flight work (for termination)
+     * and the recorded page count (for the maxPages cap).
+     */
+    private void function initAsyncState() {
+        variables.frontier      = createObject( "java", "java.util.concurrent.LinkedBlockingQueue" ).init();
+        variables.seen          = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
+        variables.processedUrls = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
+        variables.pages         = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
+        variables.badUrls       = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
+        variables.disallowedUrls = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
+        variables.pending       = createObject( "java", "java.util.concurrent.atomic.AtomicInteger" ).init( javaCast( "int", 0 ) );
+        variables.pageCount     = createObject( "java", "java.util.concurrent.atomic.AtomicInteger" ).init( javaCast( "int", 0 ) );
+    }
+
+    /**
+     * Runs the parallel crawl: starts asyncMaxThreads worker threads that each
+     * drain the shared frontier, then blocks until all workers finish.
+     *
+     * The workers are CFML threads (the `thread` tag), not executor closures. A
+     * thread body runs in this component's context, so it reads variables scope
+     * and calls the private crawlUrl directly; a closure handed to a Java thread
+     * pool cannot do this reliably across engines. Thread safety of the shared
+     * state comes from the java.util.concurrent containers, not from the thread
+     * mechanism.
+     *
+     * Termination uses the in-flight counter `pending`, which counts URLs that
+     * have been enqueued but not yet fully processed. A worker takes an item,
+     * processes it (which may enqueue children, each raising `pending`), then
+     * lowers `pending` in its finally. A worker that polls an empty frontier and
+     * sees `pending == 0` knows no work remains and no worker can add more, so it
+     * exits. The 250 ms poll timeout bounds how long an idle worker waits before
+     * re-checking, and makes the loop self-healing rather than relying on a
+     * sentinel value. Each worker logs its own fetch errors so one bad page never
+     * kills a worker thread.
+     */
+    private void function runAsyncCrawl() {
+        var threadCount = max( 1, settings.asyncMaxThreads );
+        // The poll timeout unit, read by each worker below. Kept in variables so
+        // the thread bodies can reach it (a Java object cannot be passed as a
+        // thread attribute string).
+        variables.pollUnit = createObject( "java", "java.util.concurrent.TimeUnit" ).MILLISECONDS;
+
+        // A per-crawl token keeps thread names unique. Several crawls can run in
+        // one request (e.g. a test that crawls repeatedly), and reusing a thread
+        // name that already ran in this request is an error on some engines.
+        var runToken    = createUUID();
+        var threadNames = [];
+        for ( var i = 1; i <= threadCount; i++ ) {
+            var threadName = "sitemap-worker-" & runToken & "-" & i;
+            threadNames.append( threadName );
+            thread name="#threadName#" {
+                while ( true ) {
+                    var item = variables.frontier.poll( javaCast( "long", 250 ), variables.pollUnit );
+                    if ( isNull( item ) ) {
+                        if ( variables.pending.get() == 0 ) {
+                            break;
+                        }
+                        continue;
+                    }
+                    try {
+                        crawlUrl( item.url, item.depth );
+                    } catch ( any e ) {
+                        logger.error( "Async crawl worker error on #item.url#: #e.message#", e );
+                    } finally {
+                        variables.pending.decrementAndGet();
+                    }
+                }
+            }
+        }
+
+        // Block until every worker has exited, so the crawl is complete before
+        // crawl()'s finally shuts the browser down.
+        for ( var workerName in threadNames ) {
+            thread action="join" name="#workerName#";
+        }
+    }
+
+    /**
+     * Builds the crawl result struct in the shape callers expect: pages and
+     * badUrls as CFML structs, processedUrls and disallowedUrls as arrays, plus a
+     * runAsync flag. In async mode the internal state is java.util.concurrent
+     * maps, so it is copied into CFML structs/arrays here; in sync mode the state
+     * is already CFML structs.
+     */
+    private struct function buildCrawlResult() {
+        if ( variables.async ) {
+            return {
+                "pages": javaMapToStruct( variables.pages ),
+                "badUrls": javaMapToStruct( variables.badUrls ),
+                "processedUrls": javaMapKeys( variables.processedUrls ),
+                "disallowedUrls": javaMapKeys( variables.disallowedUrls ),
+                "runAsync": true
+            };
+        }
+        return {
+            "pages": variables.pages,
+            "badUrls": variables.badUrls,
+            "processedUrls": structKeyArray( variables.processedUrls ),
+            "disallowedUrls": structKeyArray( variables.disallowedUrls ),
+            "runAsync": false
+        };
+    }
+
+    /**
+     * Copies a java.util.Map (a ConcurrentHashMap of URL -> value struct) into a
+     * CFML struct. Iterates entrySet with an iterator, the portable pattern the
+     * browser backends use for header maps.
+     * @javaMap The map to copy
+     */
+    private struct function javaMapToStruct( required any javaMap ) {
+        var out      = {};
+        var iterator = arguments.javaMap.entrySet().iterator();
+        while ( iterator.hasNext() ) {
+            var entry = iterator.next();
+            out[ entry.getKey() ] = entry.getValue();
+        }
+        return out;
+    }
+
+    /**
+     * Returns the keys of a java.util.Map as a CFML array, so a concurrent set
+     * used only for membership comes back in the same array shape sync mode
+     * returns via structKeyArray.
+     * @javaMap The map whose keys to collect
+     */
+    private array function javaMapKeys( required any javaMap ) {
+        var out      = [];
+        var iterator = arguments.javaMap.keySet().iterator();
+        while ( iterator.hasNext() ) {
+            out.append( iterator.next() );
+        }
+        return out;
     }
 
 }

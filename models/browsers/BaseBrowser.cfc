@@ -38,6 +38,16 @@ component {
     void function shutdown() {
     }
 
+    /**
+     * Reports whether this backend is safe to call from several crawl worker
+     * threads at once. Defaults to true for a stateless backend (jsoup builds a
+     * fresh request per fetch). A backend that reuses one shared browser
+     * page/context (Playwright) overrides this to return false.
+     */
+    boolean function supportsParallel() {
+        return true;
+    }
+
     private function isHtmlContentType( required string contentType ) {
         // Check if the content type is in the allowed HTML content types
         return !!( reMatchNoCase( settings.htmlContentTypePattern, contentType ).len() );

@@ -25,6 +25,9 @@ component {
         variables.throwUrls    = {}; // url -> error message
         variables.requestedUrls = []; // every fetchUrl() call, in order
         variables.robotsContent = ""; // body returned by getText() (robots.txt)
+        // Lock name guarding requestedUrls, so the recording is safe when the
+        // parallel crawler calls fetchUrl() from several worker threads at once.
+        variables.recordLock   = "FakeBrowser-" & createUUID();
         return this;
     }
 
@@ -73,7 +76,10 @@ component {
      * @url The URL to fetch.
      */
     any function fetchUrl( required string url ) {
-        variables.requestedUrls.append( arguments.url );
+        // Guard the append: the parallel crawler calls this from several threads.
+        lock name="#variables.recordLock#" type="exclusive" timeout="10" {
+            variables.requestedUrls.append( arguments.url );
+        }
 
         if ( variables.throwUrls.keyExists( arguments.url ) ) {
             throw( type = "StatusCodeException", message = variables.throwUrls[ arguments.url ] );
@@ -91,10 +97,24 @@ component {
 
     /**
      * getRequestedUrls
-     * Returns the URLs fetchUrl() was called with, in call order.
+     * Returns the URLs fetchUrl() was called with. In a single-threaded (sync)
+     * crawl this is exact call order; under the parallel crawler the order across
+     * threads is not meaningful, so async specs assert on the set, not the order.
      */
     array function getRequestedUrls() {
-        return variables.requestedUrls;
+        lock name="#variables.recordLock#" type="exclusive" timeout="10" {
+            return variables.requestedUrls;
+        }
+    }
+
+    /**
+     * supportsParallel
+     * Reports that this fake is safe for the parallel crawler (its only mutable
+     * state, requestedUrls, is lock-guarded). Mirrors the real backends' method so
+     * the Crawler can call it when deciding whether to run in parallel.
+     */
+    boolean function supportsParallel() {
+        return true;
     }
 
     /**
