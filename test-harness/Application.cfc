@@ -47,6 +47,20 @@ component{
 	this.mappings[ "/moduleroot" ] = moduleRootPath;
 	this.mappings[ "/#request.MODULE_NAME#" ] = modulePath;
 
+	// Load the cbPlaywright Java jars (Playwright + its driver bundle) onto the
+	// CF class path so the Playwright browser backend can create a Playwright
+	// instance. Guarded by directoryExists so this is a no-op when cbPlaywright
+	// is not installed (it is an optional, test-only dependency). A real host app
+	// that uses the Playwright backend must load these jars the same way.
+	this.cbPlaywrightLib = COLDBOX_APP_ROOT_PATH & "modules/cbPlaywright/lib";
+	if ( directoryExists( this.cbPlaywrightLib ) ) {
+		this.javaSettings = {
+			loadPaths : directoryList( this.cbPlaywrightLib, true, "array", "*.jar" ),
+			loadColdFusionClassPath : true,
+			reloadOnChange : false
+		};
+	}
+
 	// ORM definitions: ENABLE IF NEEDED
 	//this.datasource = "coolblog";
 	//this.ormEnabled = "true";

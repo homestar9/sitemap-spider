@@ -137,9 +137,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 			// js-redirect-old.cfm redirects with JavaScript (location.replace), which
-			// jsoup cannot see. This becomes a real assertion once the cbPlaywright
-			// backend lands in task 09; js-redirect-new.cfm is the expected target.
-			xit( "follows a JavaScript redirect (requires cbPlaywright, task 09)", function(){
+			// jsoup cannot see. This spec stays skipped under the default jsoup
+			// backend; the real assertion for the JavaScript redirect (target:
+			// contact.cfm, where the fixture's location.replace points) lives in
+			// PlaywrightSpec, which runs the Playwright backend.
+			xit( "follows a JavaScript redirect (requires Playwright, see PlaywrightSpec)", function(){
 				var oldUrl = variables.appRoot & "js-redirect-old.cfm";
 				var newUrl = variables.appRoot & "contact.cfm";
 

@@ -100,9 +100,16 @@ component accessors=true hint="Handles crawling of website URLs" {
         } );
 
         // Synchronous breadth-first crawl. v1 is single-threaded; task 14
-        // reintroduces parallelism with proper locking.
-        while ( variables.queue.len( ) ) {
-            runQueueItem();
+        // reintroduces parallelism with proper locking. The finally releases any
+        // resources the browser holds for this crawl (the Playwright backend
+        // closes its browser process here; the Jsoup backend's shutdown is a
+        // no-op), even if a fetch throws out of the loop.
+        try {
+            while ( variables.queue.len( ) ) {
+                runQueueItem();
+            }
+        } finally {
+            browser.shutdown();
         }
 
         return {

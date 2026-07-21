@@ -8,11 +8,13 @@
         "coldbox":"^8.0.0"
     },
     "devDependencies":{
-        "testbox":"*"
+        "testbox":"*",
+        "cbPlaywright":"^1.52.1"
     },
     "installPaths":{
         "coldbox":"coldbox/",
-        "testbox":"testbox/"
+        "testbox":"testbox/",
+        "cbPlaywright":"modules/cbPlaywright/"
     },
     "testbox":{
         "runner":"http://localhost:61002/tests/runner.cfm"

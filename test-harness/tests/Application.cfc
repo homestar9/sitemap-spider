@@ -32,6 +32,20 @@ component{
 	this.mappings[ "/moduleroot" ] 				= moduleRootPath;
 	this.mappings[ "/#request.MODULE_NAME#" ] 	= moduleRootPath & "#request.MODULE_PATH#";
 
+	// Load the cbPlaywright Java jars (Playwright + its driver bundle) onto the
+	// CF class path so PlaywrightSpec can create a Playwright instance. The tests
+	// run under this Application, so the jars must be loaded here (not only in the
+	// web-root Application.cfc). Guarded by directoryExists so this is a no-op when
+	// cbPlaywright is not installed (it is an optional, test-only dependency).
+	this.cbPlaywrightLib = rootPath & "modules/cbPlaywright/lib";
+	if ( directoryExists( this.cbPlaywrightLib ) ) {
+		this.javaSettings = {
+			loadPaths : directoryList( this.cbPlaywrightLib, true, "array", "*.jar" ),
+			loadColdFusionClassPath : true,
+			reloadOnChange : false
+		};
+	}
+
 	// ORM Definitions
 	/**
 	this.datasource = "coolblog";

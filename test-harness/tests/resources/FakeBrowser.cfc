@@ -121,4 +121,12 @@ component {
         return variables.robotsContent;
     }
 
+    /**
+     * shutdown
+     * No-op. The Crawler calls this when a crawl finishes; the real Playwright
+     * backend closes its browser here, but this fake holds no resources.
+     */
+    void function shutdown() {
+    }
+
 }
