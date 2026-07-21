@@ -15,6 +15,20 @@ component accessors=true hint="Handles crawling of website URLs" {
      * breadth-first traversal needs FIFO order.
      */
     function init() {
+        resetState();
+        return this;
+    }
+
+    /**
+     * Clears all per-crawl state to empty starting values.
+     *
+     * Called from init() and again at the top of each crawl(). Resetting per
+     * crawl matters because a second crawl() on the same instance would otherwise
+     * accumulate the first crawl's pages, processed URLs, and queue. The instance
+     * is normally transient (a fresh one per crawl), but WireBox may hand back a
+     * cached instance, so crawl() cannot assume it starts clean.
+     */
+    private void function resetState() {
         variables.pages = {};
         variables.processedUrls = {}; // set of URLs already crawled
         variables.queue = []; // ordered FIFO of { url, depth } still to crawl
@@ -27,7 +41,6 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.robotsBasePath = "/"; // site-root path the seed URL lives under
         variables.effectiveCrawlDelay = 0; // seconds to wait between fetches (capped)
         variables.hasFetched = false; // becomes true after the first fetch, so the delay is not applied before it
-        return this;
     }
 
     function onDiComplete() {
@@ -52,6 +65,10 @@ component accessors=true hint="Handles crawling of website URLs" {
         required array urls,
         required array excludeUrls
     ) {
+
+        // Clear any state from a prior crawl on this instance (WireBox may return a
+        // cached Crawler), so pages/processedUrls/queue do not accumulate.
+        resetState();
 
         // Validate and set hostname from the first URL
         if ( arrayLen( arguments.urls ) == 0 ) {
@@ -257,6 +274,13 @@ component accessors=true hint="Handles crawling of website URLs" {
         var lastModified = "";
         var priority = getPriority( depth );
 
+        // jsoup follows HTTP 30x, so fetchResult.url is the final URL and may
+        // differ from normalizedUrl. Fall back to normalizedUrl for a browser or
+        // result that does not set it.
+        var fetchedUrl = ( fetchResult.keyExists( "url" ) && len( fetchResult.url ) )
+            ? parser.cleanUrl( fetchResult.url )
+            : normalizedUrl;
+
         // if we have HTML content, parse it, and extract links and canonical URL
         if ( fetchResult.keyExists( "html" ) ) {
 
@@ -270,6 +294,20 @@ component accessors=true hint="Handles crawling of website URLs" {
 
             logger.info( "Parsed HTML content. Canonical URL: #canonicalUrl#, Links found: #links.len()#" );
 
+            // If the page is a meta-refresh interstitial, do not record it. Enqueue
+            // the target instead and stop here. normalizedUrl is already in the
+            // processed set (marked before the fetch), so this page is not
+            // re-crawled or indexed. The target keeps the same depth because it
+            // replaces this page rather than being a child link of it.
+            var metaRefreshUrl = parser.getMetaRefreshUrl( parsedPage, fetchedUrl );
+            if ( len( metaRefreshUrl ) && metaRefreshUrl != normalizedUrl ) {
+                logger.info( "Meta-refresh redirect: #normalizedUrl# -> #metaRefreshUrl#" );
+                if ( shouldEnqueue( metaRefreshUrl ) ) {
+                    enqueue( metaRefreshUrl, depth );
+                }
+                return;
+            }
+
         } else {
             // if we don't have HTML content, we can still extract the canonical URL from headers
             canonicalUrl = parser.getCanonicalUrl( fetchResult );
@@ -277,40 +315,20 @@ component accessors=true hint="Handles crawling of website URLs" {
             lastModified = parser.getLastModified( fetchResult );
         }
 
-        // if the canonical URL has a value and is different than the normalizedURL, perform some checks
-        if ( 
-            len( canonicalUrl ) && 
-            canonicalUrl != normalizedUrl
-        ) {
-
-            // if the canonical URL is invalid, log a warning and skip
-            if ( !isValidUrl( canonicalUrl ) ) {
-                logger.warn( "Invalid canonical URL: #canonicalUrl# for #normalizedUrl#" );
-                return;
-            }
-
-            // if robots.txt disallows the canonical URL, skip and record it
-            if ( !isAllowedByRobots( canonicalUrl ) ) {
-                logger.info( "Canonical URL disallowed by robots.txt: #canonicalUrl# for #normalizedUrl#" );
-                appendDisallowedUrl( canonicalUrl );
-                return;
-            }
-
-            // if the canonical URL is already processed, skip it.
-            // we only make this check if the canonical URL is different from the normalized URL
-            if ( isUrlProcessed( canonicalUrl ) ) {
-                logger.info( "Canonical URL already processed: #canonicalUrl# for #normalizedUrl#" );
-                return;
-            }
-
-            // append the canonical URL to the processed list
-            appendProcessedUrl( canonicalUrl );
-
+        // The page is recorded under the canonical URL if it declares one, else
+        // under the final URL jsoup landed on after any HTTP redirect, else the URL
+        // we asked for. Canonical wins because it is the site's own authoritative
+        // choice. resolveEffectiveUrl runs the shared dedupe checks and signals
+        // whether to skip recording this page.
+        var effectiveUrl = len( canonicalUrl ) ? canonicalUrl : fetchedUrl;
+        var resolved = resolveEffectiveUrl( normalizedUrl, effectiveUrl );
+        if ( resolved.skip ) {
+            return;
         }
 
         // append the page to our sitemap
-        appendPage( 
-            url = ( len( canonicalUrl ) ? canonicalUrl : normalizedUrl ),
+        appendPage(
+            url = resolved.url,
             lastModified = ( isDate( lastModified ) ? lastModified : now() ),
             priority = priority,
             depth = depth
@@ -323,6 +341,41 @@ component accessors=true hint="Handles crawling of website URLs" {
             }
         }
 
+    }
+
+    /**
+     * Resolves the URL a fetched page should be recorded under, and runs the
+     * dedupe checks shared by canonical URLs and followed HTTP redirects.
+     * @normalizedUrl The URL the crawler requested (already cleaned).
+     * @effectiveUrl The canonical or post-redirect URL the page really belongs to.
+     *
+     * When effectiveUrl is empty or equals normalizedUrl, the page is recorded
+     * as-is. When it differs, the page is really "that other URL": it is validated,
+     * checked against robots.txt, and checked against the processed set. Returns a
+     * struct { url, skip }. skip is true when the effective URL is invalid,
+     * robots-disallowed (recorded in disallowedUrls), or already processed, in
+     * which case the caller must stop and not record the page. Otherwise the
+     * effective URL is added to the processed set so a later link to it is deduped.
+     */
+    private struct function resolveEffectiveUrl( required string normalizedUrl, required string effectiveUrl ) {
+        if ( !len( arguments.effectiveUrl ) || arguments.effectiveUrl == arguments.normalizedUrl ) {
+            return { "url": arguments.normalizedUrl, "skip": false };
+        }
+        if ( !isValidUrl( arguments.effectiveUrl ) ) {
+            logger.warn( "Invalid effective URL: #arguments.effectiveUrl# for #arguments.normalizedUrl#" );
+            return { "url": arguments.effectiveUrl, "skip": true };
+        }
+        if ( !isAllowedByRobots( arguments.effectiveUrl ) ) {
+            logger.info( "Effective URL disallowed by robots.txt: #arguments.effectiveUrl# for #arguments.normalizedUrl#" );
+            appendDisallowedUrl( arguments.effectiveUrl );
+            return { "url": arguments.effectiveUrl, "skip": true };
+        }
+        if ( isUrlProcessed( arguments.effectiveUrl ) ) {
+            logger.info( "Effective URL already processed: #arguments.effectiveUrl# for #arguments.normalizedUrl#" );
+            return { "url": arguments.effectiveUrl, "skip": true };
+        }
+        appendProcessedUrl( arguments.effectiveUrl );
+        return { "url": arguments.effectiveUrl, "skip": false };
     }
 
     private void function appendPage(

@@ -79,6 +79,49 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
+     * Finds a meta-refresh redirect target on a parsed page and returns it as an
+     * absolute, cleaned URL, or "" when the page has no such redirect.
+     * @parsedPage The jSoup document for the page.
+     * @baseUrl The page's own URL, used to resolve a relative target.
+     *
+     * A meta-refresh tag looks like:
+     *   <meta http-equiv="refresh" content="3;url=redirect-new.cfm">
+     * The number before the ";" is the delay in seconds; any delay counts as a
+     * redirect here. A tag with no "url=" part (e.g. content="5") just reloads the
+     * same page, so this returns "".
+     *
+     * The target is resolved against baseUrl with java.net.URL's two-argument
+     * constructor. This manual resolution is required because jSoup's "abs:"
+     * attribute prefix only resolves href/src attributes, not a URL parsed out of
+     * the "content" attribute's string value. An already-absolute target is
+     * returned unchanged (the two-arg constructor ignores the base then).
+     */
+    string function getMetaRefreshUrl( required any parsedPage, required string baseUrl ) {
+        var meta = arguments.parsedPage.select( "meta[http-equiv=refresh]" );
+        if ( !meta.size() ) {
+            return "";
+        }
+        var content = meta.first().attr( "content" );
+        // Capture the value after "url=", allowing spaces and optional quotes.
+        var match = reFindNoCase( "url\s*=\s*[""']?([^""']+)", content, 1, true );
+        if ( match.pos.len() < 2 || match.pos[ 2 ] == 0 ) {
+            return "";
+        }
+        var rawTarget = trim( mid( content, match.pos[ 2 ], match.len[ 2 ] ) );
+        if ( !len( rawTarget ) ) {
+            return "";
+        }
+        try {
+            var base = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.baseUrl ) );
+            var absolute = createObject( "java", "java.net.URL" ).init( base, javaCast( "string", rawTarget ) ).toString();
+            return cleanUrl( absolute );
+        } catch ( any e ) {
+            logger.warn( "Could not resolve meta-refresh target '#rawTarget#' against '#arguments.baseUrl#': #e.message#" );
+            return "";
+        }
+    }
+
+    /**
      * Cleans and normalizes a URL string.
      * @url The URL to clean
      *

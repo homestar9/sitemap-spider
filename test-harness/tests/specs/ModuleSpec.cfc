@@ -96,6 +96,60 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 		} );
+
+		describe( "redirect handling", function(){
+
+			// The redirect fixtures are not linked from any reachable page, so each
+			// spec seeds the interstitial URL directly. This also leaves the shared
+			// baseline crawl in beforeAll untouched.
+
+			it( "follows a meta-refresh and records the target, not the interstitial", function(){
+				var oldUrl = variables.appRoot & "redirect-old.cfm";
+				var newUrl = variables.appRoot & "redirect-new.cfm";
+
+				var result = getInstance( "sitemapService@sitemap-spider" ).create( oldUrl );
+
+				expect( result.pages ).toHaveKey( newUrl );
+				expect( result.pages ).notToHaveKey( oldUrl );
+			} );
+
+			it( "records the final URL of an HTTP (cflocation) redirect", function(){
+				var oldUrl = variables.appRoot & "location-old.cfm";
+				var newUrl = variables.appRoot & "location-new.cfm";
+
+				var result = getInstance( "sitemapService@sitemap-spider" ).create( oldUrl );
+
+				expect( result.pages ).toHaveKey( newUrl );
+				expect( result.pages ).notToHaveKey( oldUrl );
+			} );
+
+			it( "does not carry pages over from a previous crawl", function(){
+				// Regression for the Crawler state-reset fix: WireBox may hand back a
+				// cached Crawler, so crawl() resets its state at the top. A first crawl
+				// of the meta-refresh interstitial records redirect-new.cfm; a second,
+				// unrelated crawl must not still contain it.
+				var service = getInstance( "sitemapService@sitemap-spider" );
+				service.create( variables.appRoot & "redirect-old.cfm" );
+				var second = service.create( variables.appRoot & "location-old.cfm" );
+
+				expect( second.pages ).toHaveKey( variables.appRoot & "location-new.cfm" );
+				expect( second.pages ).notToHaveKey( variables.appRoot & "redirect-new.cfm" );
+			} );
+
+			// js-redirect-old.cfm redirects with JavaScript (location.replace), which
+			// jsoup cannot see. This becomes a real assertion once the cbPlaywright
+			// backend lands in task 09; js-redirect-new.cfm is the expected target.
+			xit( "follows a JavaScript redirect (requires cbPlaywright, task 09)", function(){
+				var oldUrl = variables.appRoot & "js-redirect-old.cfm";
+				var newUrl = variables.appRoot & "contact.cfm";
+
+				var result = getInstance( "sitemapService@sitemap-spider" ).create( oldUrl );
+
+				expect( result.pages ).toHaveKey( newUrl );
+				expect( result.pages ).notToHaveKey( oldUrl );
+			} );
+
+		} );
 	}
 
 }

@@ -58,7 +58,11 @@ component
         // Check content type
         var contentType = response.contentType();
         var result = {
-            url = arguments.url,
+            // response.url() is the final URL after jsoup follows any HTTP 30x
+            // (followRedirects defaults to true). It may differ from the requested
+            // arguments.url. response.url() returns a java.net.URL, so toString()
+            // makes it a CFML string.
+            url = response.url().toString(),
             headers = cfHeaders,
             contentType = contentType
         };

@@ -36,10 +36,13 @@ component {
      * @html The page body. Use absolute hrefs in <a> tags, because the Parser
      *       parses this html with no base URI, so only absolute hrefs resolve.
      * @headers Optional response headers (e.g. { "Last-Modified": "..." }).
+     * @finalUrl The URL returned in the result's "url" key. Defaults to @url. Set
+     *           it to a different URL to simulate a followed HTTP 30x, the way the
+     *           real Jsoup browser returns response.url() (the post-redirect URL).
      */
-    function addPage( required string url, required string html, struct headers = {} ) {
+    function addPage( required string url, required string html, struct headers = {}, string finalUrl = arguments.url ) {
         variables.pages[ arguments.url ] = {
-            "url"         : arguments.url,
+            "url"         : arguments.finalUrl,
             "headers"     : arguments.headers,
             "contentType" : "text/html;charset=UTF-8",
             "html"        : arguments.html

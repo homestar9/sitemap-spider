@@ -185,6 +185,45 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				expect( result.pages ).toHaveKey( goodUrl );
 			} );
 
+			it( "follows a meta-refresh and records the target, not the interstitial", function(){
+				var oldUrl = variables.root & "redirect-old.cfm";
+				var newUrl = variables.root & "redirect-new.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( oldUrl ) );
+				// The interstitial carries a meta-refresh to the new URL (absolute so
+				// getMetaRefreshUrl resolves it without a parse base).
+				ctx.fake.addPage(
+					oldUrl,
+					'<html><head><meta http-equiv="refresh" content="3;url=#newUrl#"></head><body></body></html>'
+				);
+				ctx.fake.addPage( newUrl, "" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.pages ).toHaveKey( newUrl );
+				expect( result.pages ).notToHaveKey( oldUrl );
+			} );
+
+			it( "records the final URL of an HTTP redirect, not the requested URL", function(){
+				var oldUrl = variables.root & "location-old.cfm";
+				var newUrl = variables.root & "location-new.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( oldUrl ) );
+				// finalUrl simulates jsoup following a 30x: the fetch of oldUrl returns
+				// a result whose url key is newUrl.
+				ctx.fake.addPage( oldUrl, "", {}, newUrl );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.pages ).toHaveKey( newUrl );
+				expect( result.pages ).notToHaveKey( oldUrl );
+				// newUrl is recorded via the redirect from oldUrl; it is never fetched
+				// on its own, so the browser sees only root + oldUrl.
+				expect( ctx.fake.getRequestedUrls().findNoCase( newUrl ) ).toBe( 0 );
+			} );
+
 			it( "never fetches an excluded URL", function(){
 				var keepUrl = variables.root & "a.cfm";
 				var dropUrl = variables.root & "b.cfm";

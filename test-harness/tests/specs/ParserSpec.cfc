@@ -208,6 +208,47 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			} );
 
+			describe( "getMetaRefreshUrl()", function(){
+
+				it( "resolves a relative target against the base URL", function(){
+					var page = variables.parser.parseHtml(
+						'<html><head><meta http-equiv="refresh" content="3;url=redirect-new.cfm"></head></html>'
+					);
+					expect( variables.parser.getMetaRefreshUrl( page, "http://example.test/dir/" ) )
+						.toBe( "http://example.test/dir/redirect-new.cfm" );
+				} );
+
+				it( "accepts an already-absolute target", function(){
+					var page = variables.parser.parseHtml(
+						'<html><head><meta http-equiv="refresh" content="0;url=http://example.test/new.cfm"></head></html>'
+					);
+					expect( variables.parser.getMetaRefreshUrl( page, "http://example.test/old.cfm" ) )
+						.toBe( "http://example.test/new.cfm" );
+				} );
+
+				it( "handles uppercase URL and extra spacing", function(){
+					var page = variables.parser.parseHtml(
+						'<html><head><meta http-equiv="refresh" content="0; URL=next.cfm"></head></html>'
+					);
+					expect( variables.parser.getMetaRefreshUrl( page, "http://example.test/" ) )
+						.toBe( "http://example.test/next.cfm" );
+				} );
+
+				it( "returns empty when there is no meta-refresh tag", function(){
+					var page = variables.parser.parseHtml( "<html><head></head><body></body></html>" );
+					expect( variables.parser.getMetaRefreshUrl( page, "http://example.test/" ) ).toBe( "" );
+				} );
+
+				it( "returns empty for a refresh with no url= part", function(){
+					// content="5" reloads the same page; it is not a redirect.
+					var page = variables.parser.parseHtml(
+						'<html><head><meta http-equiv="refresh" content="5"></head></html>'
+					);
+					expect( variables.parser.getMetaRefreshUrl( page, "http://example.test/" ) ).toBe( "" );
+				} );
+
+			} );
+
 			describe( "isNoFollow()", function(){
 
 				it( "is true for rel=nofollow", function(){
