@@ -37,6 +37,12 @@ component {
             notAllowedPattern : "\.(png|webp|svg|gif|js|css|jpg|jpeg)$|javascript:|mailto:|tel:",
             priority : 1.0,
             priorityDecrement : 0.1, // each depth reduces priority by this much
+            // sitemaps.org hard limits per sitemap file. When a crawl exceeds
+            // either, SitemapService splits the output into numbered child
+            // sitemaps plus a <sitemapindex>. maxUrls is the URL count; maxBytes
+            // is the uncompressed file size (50 MiB).
+            maxUrlsPerSitemap : 50000,
+            maxSitemapBytes : 52428800,
             // What <lastmod> does when a page has no parseable Last-Modified
             // (no HTTP header, no meta tag): "omit" leaves <lastmod> out for that
             // URL (honest); "crawlTime" records the crawl timestamp instead.

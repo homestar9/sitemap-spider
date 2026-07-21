@@ -59,6 +59,12 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			&& fileExists( variables.savedSitemapFile ) ) {
 			fileDelete( variables.savedSitemapFile );
 		}
+		// Remove the directory the index-splitting spec wrote into.
+		if ( structKeyExists( variables, "splitOutDir" )
+			&& len( variables.splitOutDir )
+			&& directoryExists( variables.splitOutDir ) ) {
+			directoryDelete( variables.splitOutDir, true );
+		}
 		super.afterAll();
 	}
 
@@ -178,6 +184,45 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				expect( fileExists( variables.savedSitemapFile ) ).toBeTrue();
 				// The file holds the same XML returned in the struct.
 				expect( fileRead( variables.savedSitemapFile ) ).toBe( result.sitemap );
+			} );
+
+		} );
+
+		describe( "sitemap index splitting via create()", function(){
+
+			it( "splits into an index and child files when the crawl exceeds maxUrlsPerSitemap", function(){
+				// Temporarily lower the per-file URL limit so the sample crawl
+				// (4 valid pages) splits into more than one file. The setting is
+				// the shared module-settings struct the service injects, so it is
+				// restored in the finally to avoid leaking into other specs.
+				var settings   = getInstance( "coldbox:moduleSettings:sitemap-spider" );
+				var originalMax = settings.maxUrlsPerSitemap;
+				variables.splitOutDir = getTempDirectory() & "sitemap-split-" & getTickCount() & "/";
+				var indexPath  = variables.splitOutDir & "sitemap.xml";
+
+				try {
+					settings.maxUrlsPerSitemap = 2;
+
+					var result = getInstance( "sitemapService@sitemap-spider" )
+						.create( url = variables.appRoot, filePath = indexPath );
+
+					expect( result.type ).toBe( "index" );
+					expect( result.saved ).toBeTrue();
+					expect( result.sitemapCount ).toBeGT( 1 );
+					expect( result.sitemapCount ).toBe( result.sitemaps.len() );
+
+					// The primary file is the served root and holds a <sitemapindex>.
+					expect( fileExists( indexPath ) ).toBeTrue();
+					expect( result.sitemap ).toInclude( "<sitemapindex" );
+
+					// Each child sitemap was written beside the index under its name.
+					for ( var child in result.sitemaps ) {
+						expect( fileExists( child.filePath ) ).toBeTrue();
+						expect( child.filePath ).toInclude( child.filename );
+					}
+				} finally {
+					settings.maxUrlsPerSitemap = originalMax;
+				}
 			} );
 
 		} );

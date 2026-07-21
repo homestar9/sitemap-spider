@@ -107,6 +107,132 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			} );
 
+			describe( "generateSet()", function(){
+
+				it( "returns a single urlset when under the limits", function(){
+					var pages = {
+						"http://example.test/a.cfm" : { lastModified : "", priority : 0.9 },
+						"http://example.test/b.cfm" : { lastModified : "", priority : 0.8 }
+					};
+
+					var out = variables.generator.generateSet( pages = pages, maxUrls = 50000 );
+
+					expect( out.type ).toBe( "single" );
+					expect( out.sitemaps ).toBeEmpty();
+					var doc = xmlParse( out.xml );
+					expect( doc.xmlRoot.xmlName ).toBe( "urlset" );
+					expect( doc.xmlRoot.xmlChildren.len() ).toBe( 2 );
+				} );
+
+				it( "single output matches generate() byte-for-byte", function(){
+					var pages = {
+						"http://example.test/a.cfm" : { lastModified : "2026-07-20", priority : 0.9 },
+						"http://example.test/b.cfm" : { lastModified : "", priority : 0.8 }
+					};
+
+					var out = variables.generator.generateSet( pages = pages );
+
+					expect( out.xml ).toBe( variables.generator.generate( pages ) );
+				} );
+
+				it( "splits into an index plus child sitemaps when over maxUrls", function(){
+					var pages = {
+						"http://example.test/1.cfm" : { lastModified : "", priority : 0.5 },
+						"http://example.test/2.cfm" : { lastModified : "", priority : 0.5 },
+						"http://example.test/3.cfm" : { lastModified : "", priority : 0.5 },
+						"http://example.test/4.cfm" : { lastModified : "", priority : 0.5 },
+						"http://example.test/5.cfm" : { lastModified : "", priority : 0.5 }
+					};
+
+					var out = variables.generator.generateSet(
+						pages         = pages,
+						publicBaseUrl = "https://example.test/",
+						maxUrls       = 2
+					);
+
+					// 5 URLs at 2 per file -> 3 child sitemaps.
+					expect( out.type ).toBe( "index" );
+					expect( out.sitemaps.len() ).toBe( 3 );
+
+					// The index parses to a sitemapindex with 3 <sitemap> entries
+					// whose <loc>s are the absolute child URLs.
+					var indexDoc = xmlParse( out.xml );
+					expect( indexDoc.xmlRoot.xmlName ).toBe( "sitemapindex" );
+					expect( indexDoc.xmlRoot.xmlChildren.len() ).toBe( 3 );
+					expect( out.xml ).toInclude( "<loc>https://example.test/sitemap-1.xml</loc>" );
+					expect( out.xml ).toInclude( "<loc>https://example.test/sitemap-3.xml</loc>" );
+
+					// Each child parses to a urlset; the total URL count is 5 and no
+					// child exceeds the limit.
+					var totalUrls = 0;
+					for ( var child in out.sitemaps ) {
+						var childDoc = xmlParse( child.xml );
+						expect( childDoc.xmlRoot.xmlName ).toBe( "urlset" );
+						expect( child.urlCount ).toBeLTE( 2 );
+						totalUrls += child.urlCount;
+					}
+					expect( totalUrls ).toBe( 5 );
+				} );
+
+				it( "derives child filenames from primaryFilename", function(){
+					var pages = {
+						"http://example.test/1.cfm" : { lastModified : "", priority : 0.5 },
+						"http://example.test/2.cfm" : { lastModified : "", priority : 0.5 },
+						"http://example.test/3.cfm" : { lastModified : "", priority : 0.5 }
+					};
+
+					var out = variables.generator.generateSet(
+						pages           = pages,
+						publicBaseUrl   = "https://example.test/",
+						primaryFilename = "foo.xml",
+						maxUrls         = 2
+					);
+
+					expect( out.sitemaps[ 1 ].filename ).toBe( "foo-1.xml" );
+					expect( out.sitemaps[ 2 ].filename ).toBe( "foo-2.xml" );
+					expect( out.xml ).toInclude( "<loc>https://example.test/foo-1.xml</loc>" );
+				} );
+
+				it( "splits by byte size when maxBytes is small", function(){
+					var pages = {
+						"http://example.test/1.cfm" : { lastModified : "", priority : 0.5 },
+						"http://example.test/2.cfm" : { lastModified : "", priority : 0.5 },
+						"http://example.test/3.cfm" : { lastModified : "", priority : 0.5 }
+					};
+
+					// A tiny byte budget forces one URL per file even though the URL
+					// count is well under maxUrls.
+					var out = variables.generator.generateSet(
+						pages         = pages,
+						publicBaseUrl = "https://example.test/",
+						maxUrls       = 50000,
+						maxBytes      = 200
+					);
+
+					expect( out.type ).toBe( "index" );
+					expect( out.sitemaps.len() ).toBe( 3 );
+				} );
+
+				it( "sets the index lastmod to the newest page date in each chunk", function(){
+					var pages = {
+						"http://example.test/1.cfm" : { lastModified : "2026-01-10", priority : 0.5 },
+						"http://example.test/2.cfm" : { lastModified : "2026-03-25", priority : 0.5 }
+					};
+
+					var out = variables.generator.generateSet(
+						pages         = pages,
+						publicBaseUrl = "https://example.test/",
+						maxUrls       = 50000,
+						maxBytes      = 200 // force one URL per file
+					);
+
+					expect( out.sitemaps[ 1 ].lastmod ).toBe( "2026-01-10" );
+					expect( out.sitemaps[ 2 ].lastmod ).toBe( "2026-03-25" );
+					expect( out.xml ).toInclude( "<lastmod>2026-03-25</lastmod>" );
+				} );
+
+			} );
+
 			describe( "saveToFile()", function(){
 
 				it( "writes the XML and reads back exactly what was written", function(){

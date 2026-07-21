@@ -23,13 +23,19 @@ component
      * @excludeUrls Array of URLs to exclude from crawling
      * @filePath Optional full path to save the sitemap XML to. When set, the XML
      *   is written there (creating the directory if needed) and the return struct
-     *   reports saved=true. A write failure throws sitemap-spider.SaveFailed.
+     *   reports saved=true. A write failure throws sitemap-spider.SaveFailed. When
+     *   the crawl exceeds the per-file limits, this becomes the <sitemapindex>
+     *   file and child sitemaps are written beside it (its basename + "-N").
+     * @publicBaseUrl Absolute URL prefix the child sitemaps are served from, used
+     *   for the <sitemapindex> <loc> entries (only relevant when splitting). When
+     *   empty, it is derived from the first start URL's directory.
      * @return A struct containing the crawled pages, sitemap XML, and duration
      */
     struct function create(
         required any url, // String or array of strings
         array excludeUrls = [], // Array of URLs to exclude from crawling
-        string filePath = "" // Optional file path to save the sitemap XML to
+        string filePath = "", // Optional file path to save the sitemap XML to
+        string publicBaseUrl = "" // Absolute URL prefix for <sitemapindex> entries
     ) {
         var start = getTickCount();
 
@@ -42,15 +48,45 @@ component
             excludeUrls = arguments.excludeUrls
         );
 
-        // Generate sitemap XML
-        var sitemapXml = generator.generate( result.pages );
+        // The absolute URL prefix the child sitemaps are served from. Prefer the
+        // caller's publicBaseUrl; otherwise use the first start URL's directory
+        // (everything up to and including its last "/"), which is where the
+        // sitemap files are assumed to live.
+        var baseUrl = len( arguments.publicBaseUrl )
+            ? ensureTrailingSlash( arguments.publicBaseUrl )
+            : ensureTrailingSlash( urlArray[ 1 ].reReplace( "[^/]*$", "" ) );
 
-        // Optionally save the XML to disk. A failure here is surfaced as a typed
-        // error rather than swallowed, so the caller knows the file was not written.
-        var saved = false;
+        // The filename the primary file (index or single) is written as. Child
+        // sitemaps derive their names from it. Defaults to "sitemap.xml" when no
+        // filePath was given (still used to name the <sitemapindex> children).
+        var primaryFilename = len( arguments.filePath ) ? getFileFromPath( arguments.filePath ) : "sitemap.xml";
+
+        // Generate the sitemap set. Below the per-file limits this is a single
+        // <urlset>; above them it is a <sitemapindex> plus child <urlset> files.
+        var setResult = generator.generateSet(
+            pages          = result.pages,
+            publicBaseUrl  = baseUrl,
+            primaryFilename = primaryFilename,
+            maxUrls        = settings.maxUrlsPerSitemap,
+            maxBytes       = settings.maxSitemapBytes
+        );
+
+        // Optionally save to disk. A failure here is surfaced as a typed error
+        // rather than swallowed, so the caller knows the file was not written.
+        // For a split set the index is written to filePath and each child is
+        // written beside it under its derived filename.
+        var saved    = false;
+        var sitemaps = setResult.sitemaps;
         if ( len( arguments.filePath ) ) {
             try {
-                generator.saveToFile( sitemapXml, arguments.filePath );
+                generator.saveToFile( setResult.xml, arguments.filePath );
+                if ( setResult.type == "index" ) {
+                    var dir = getDirectoryFromPath( arguments.filePath );
+                    for ( var child in sitemaps ) {
+                        child.filePath = dir & child.filename;
+                        generator.saveToFile( child.xml, child.filePath );
+                    }
+                }
                 saved = true;
             } catch ( any e ) {
                 logger.error( "Failed to save sitemap to #arguments.filePath#: #e.message#", e );
@@ -64,7 +100,10 @@ component
 
         return {
             "pages": result.pages,
-            "sitemap": sitemapXml,
+            "sitemap": setResult.xml,
+            "type": setResult.type,
+            "sitemaps": sitemaps,
+            "sitemapCount": setResult.type == "index" ? sitemaps.len() : 1,
             "duration": getTickCount() - start,
             "processedUrls": result.processedUrls,
             "badUrls": result.badUrls,
@@ -72,6 +111,17 @@ component
             "filePath": arguments.filePath,
             "saved": saved
         };
+    }
+
+    /**
+     * ensureTrailingSlash
+     * Return the value with a single trailing "/" so it can be concatenated with
+     * a child filename to form an absolute URL.
+     *
+     * @value the URL prefix to normalize
+     */
+    private string function ensureTrailingSlash( required string value ) {
+        return arguments.value.right( 1 ) == "/" ? arguments.value : arguments.value & "/";
     }
 
 }
