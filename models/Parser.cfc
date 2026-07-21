@@ -43,7 +43,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
      * Gets the last modified date from a fetch result
      * @fetchResult The fetch result containing headers and body
      */
-    string function getLastModified( required any fetchResult ) {
+    string function getLastModified( required any fetchResult, any parsedPage ) {
         if ( fetchResult.headers.keyExists( "Last-Modified" ) ) {
             return fetchResult.headers[ "Last-Modified" ];
         }
@@ -54,28 +54,27 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     string function getCanonicalUrl( required struct fetchResult, any parsedPage ) {
         // If parsedPage is provided, use it; otherwise, parse the HTML from fetchResult
         if ( arguments.keyExists( "parsedPage" ) ) {
-            var canonical = parsedPage.select("link[rel=canonical]");
+            var canonical = arguments.parsedPage.select( "link[rel=canonical]" );
             if ( canonical.size() ) {
                 return canonical.first().attr( "abs:href" );
             }
         }
 
-        // next try to get canonical from fetchResult.headers
-        // header will look like: <https://example.com/page.html>; rel="canonical"
+        // Next try to get canonical from the Link header, which looks like:
+        // <https://example.com/page.html>; rel="canonical"
+        // A single Link header can carry several comma-separated relations, so the
+        // canonicalHeaderPattern is unanchored: reFind scans the whole header and
+        // finds the canonical entry wherever it sits among the others.
         if ( fetchResult.headers.keyExists( "Link" ) ) {
             var linkHeader = fetchResult.headers[ "Link" ];
-            // Use regex to extract the URL from the Link header
-            var matches = reMatch( '^<([^>]+)>\s*;\s*rel\s*=\s*["'']?canonical["'']?$', linkHeader );
-            if ( matches.len() ) {
-                // Extract URL from <...> in first match
-                var urlMatch = reMatch( '^<([^>]+)>', matches[1] );
-                if ( urlMatch.len() ) {
-                    // strip the left and right brackets
-                    return mid( urlMatch[ 1 ], 2, len( urlMatch[ 1 ] ) - 1 );
-                }
+            var match = reFind( settings.canonicalHeaderPattern, linkHeader, 1, true );
+            // pos[2]/len[2] is capture group 1 (the URL inside <...>); pos[2] > 0
+            // means the group matched.
+            if ( match.pos.len() >= 2 && match.pos[ 2 ] > 0 ) {
+                return mid( linkHeader, match.pos[ 2 ], match.len[ 2 ] );
             }
         }
-        
+
         return "";
     }
 
@@ -84,14 +83,17 @@ component accessors=true hint="Parses HTML content to extract links and metadata
      * @url The URL to clean
      */
     private string function cleanUrl( required string url ) {
-        var cleaned = arguments.url
-            .replace( " ", "", "all" ) // remove spaces
-            .replace( "%20", "", "all" ) // remove URL-encoded spaces
-            .replace( "\", "/", "all" );  // ensure slash is used instead of backslash
-        // Remove fragments (e.g., #anchor)
+        // Overlaps Crawler.normalizeUrl(); consolidate the two in task 06.
+        // Trim the ends, then encode interior spaces as %20 rather than deleting
+        // them. Replacing " " with "%20" after trim never touches an existing
+        // %20, so an already-encoded URL is preserved.
+        var cleaned = trim( arguments.url );          // drop leading/trailing whitespace
+        cleaned = cleaned.replace( "\", "/", "all" ); // backslash -> forward slash
+        cleaned = cleaned.replace( " ", "%20", "all" ); // encode interior spaces
+        // Remove the fragment, including the "#" itself (e.g., "page#anchor" -> "page")
         var fragmentIndex = cleaned.find( "##" );
         if ( fragmentIndex > 0 ) {
-            cleaned = cleaned.left( fragmentIndex );
+            cleaned = cleaned.left( fragmentIndex - 1 );
         }
         return cleaned;
     }

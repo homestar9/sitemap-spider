@@ -26,19 +26,21 @@ component {
 	 */
 	function configure(){
         // Module Settings
-		variables.settings = { 
+		variables.settings = {
             libPath : modulePath & "/lib",
-            browserDsl: "Jsoup@sitemap-spider",
-            maxDepth = 10,
-            maxPages = 1000,
-            notAllowedPattern = "\.(png|webp|svg|gif|js|css|jpg|jpeg)$|javascript:|mailto:|tel:",
-            priority = 1.0,
-            priorityDecrement = 0.1, // each depth reduces priority by this much
-            requestTimeout = 10000, // ms
-            asyncMaxThreads = 10,
-            runAsync = false,
-            htmlContentTypePattern = "^(text/html|application/xhtml\+xml)(;.*)?$", // check for links + canonical URLs
-            canonicaHeaderPattern = '<([^>]+)>\s*;\s*rel\s*=\s*"canonical"'
+            browserDsl : "Jsoup@sitemap-spider",
+            maxDepth : 10,
+            maxPages : 1000,
+            notAllowedPattern : "\.(png|webp|svg|gif|js|css|jpg|jpeg)$|javascript:|mailto:|tel:",
+            priority : 1.0,
+            priorityDecrement : 0.1, // each depth reduces priority by this much
+            requestTimeout : 10000, // ms
+            asyncMaxThreads : 10,
+            runAsync : false,
+            htmlContentTypePattern : "^(text/html|application/xhtml\+xml)(;.*)?$", // check for links + canonical URLs
+            // Unanchored so it matches a canonical entry inside a multi-relation Link
+            // header; the optional quotes accept rel=canonical and rel="canonical".
+            canonicalHeaderPattern : '<([^>]+)>\s*;\s*rel\s*=\s*["'']?canonical["'']?'
         };
 	}
 

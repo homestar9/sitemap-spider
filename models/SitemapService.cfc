@@ -29,7 +29,6 @@ component
         boolean runAsync = settings.runAsync
     ) {
         var start = getTickCount();
-        variables.runAsync = runAsync;
 
         // Normalize url to an array
         var urlArray = isArray( arguments.url ) ? arguments.url : [ arguments.url ];

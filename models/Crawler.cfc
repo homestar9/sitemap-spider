@@ -109,7 +109,10 @@ component accessors=true hint="Handles crawling of website URLs" {
     }
 
     private boolean function isUrlAllowed( required string url ) {
-        return reMatch( arguments.url, settings.notAllowedPattern ).len() == 0
+        // reFindNoCase returns the match position, or 0 when the pattern is not
+        // found. So !position is true (allowed) only when the URL does NOT match
+        // notAllowedPattern. Same form as Parser.isUrlAllowed().
+        return !reFindNoCase( settings.notAllowedPattern, arguments.url );
     }
 
     private boolean function isUrlHostMatch( required string url ) {
@@ -310,6 +313,9 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * Normalize URL (remove fragments, preserve trailing slashes and extensions)
      * @url URL to normalize
+     *
+     * Overlaps Parser.cleanUrl() (both trim, strip fragments, normalize slashes).
+     * Consolidate the two in task 06.
      */
     private string function normalizeUrl( required string url ) {
         var cleaned = trim( arguments.url ); // Remove leading/trailing whitespace
@@ -332,7 +338,10 @@ component accessors=true hint="Handles crawling of website URLs" {
     }
 
     private function getPriority( required numeric depth ) {
-        return settings.priority - ( settings.priorityDecrement * depth );
+        // Clamp to a 0.1 floor. At maxDepth (default 10) the raw value reaches 0.0,
+        // and a higher maxDepth would go negative; sitemaps.org allows 0.0-1.0 but
+        // 0.1 keeps deep pages minimally prioritized rather than "ignore me".
+        return max( 0.1, settings.priority - ( settings.priorityDecrement * arguments.depth ) );
     }
 
     private void function appendBadUrl( required string url, required string message ) {
