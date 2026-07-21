@@ -37,6 +37,10 @@ component {
             notAllowedPattern : "\.(png|webp|svg|gif|js|css|jpg|jpeg)$|javascript:|mailto:|tel:",
             priority : 1.0,
             priorityDecrement : 0.1, // each depth reduces priority by this much
+            // What <lastmod> does when a page has no parseable Last-Modified
+            // (no HTTP header, no meta tag): "omit" leaves <lastmod> out for that
+            // URL (honest); "crawlTime" records the crawl timestamp instead.
+            lastModFallback : "omit",
             requestTimeout : 10000, // ms
             maxBodySize : 5242880, // 5 MB cap on the response body jsoup downloads
             // Playwright backend only: how long to wait for JS after navigation.

@@ -17,12 +17,17 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		variables.generator = getInstance( "SitemapGenerator@sitemap-spider" );
 		variables.tempFile  = "";
+		variables.tempDir   = "";
 	}
 
 	function afterAll(){
 		// Remove the file saveToFile() wrote, if the test left one behind.
 		if ( len( variables.tempFile ) && fileExists( variables.tempFile ) ) {
 			fileDelete( variables.tempFile );
+		}
+		// Remove the directory saveToFile() created for the directory-creation test.
+		if ( len( variables.tempDir ) && directoryExists( variables.tempDir ) ) {
+			directoryDelete( variables.tempDir, true );
 		}
 		super.afterAll();
 	}
@@ -76,6 +81,23 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					expect( withoutDate.findNoCase( "<lastmod>" ) ).toBe( 0 );
 				} );
 
+				it( "formats a real date object as W3C date-only (yyyy-mm-dd)", function(){
+					// A parsed date carries a time-of-day; <lastmod> must drop it and
+					// keep the zero-padded YYYY-MM-DD form.
+					var when = createDateTime( 2026, 3, 5, 14, 30, 0 );
+					var xml  = variables.generator.generate( {
+						"http://example.test/a.cfm" : { lastModified : when, priority : 0.5 }
+					} );
+					expect( xml ).toInclude( "<lastmod>2026-03-05</lastmod>" );
+				} );
+
+				it( "renders priority with one decimal place", function(){
+					var xml = variables.generator.generate( {
+						"http://example.test/a.cfm" : { lastModified : "", priority : 1.0 }
+					} );
+					expect( xml ).toInclude( "<priority>1.0</priority>" );
+				} );
+
 				it( "always renders priority", function(){
 					var xml = variables.generator.generate( {
 						"http://example.test/a.cfm" : { lastModified : "", priority : 0.5 }
@@ -97,6 +119,20 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 					expect( fileExists( variables.tempFile ) ).toBeTrue();
 					expect( fileRead( variables.tempFile ) ).toBe( xml );
+				} );
+
+				it( "creates the parent directory when it does not exist", function(){
+					var xml = variables.generator.generate( {
+						"http://example.test/a.cfm" : { lastModified : "", priority : 0.5 }
+					} );
+					// A subdirectory that does not exist yet; saveToFile must create it.
+					variables.tempDir = getTempDirectory() & "sitemap-generator-spec-dir-" & getTickCount() & "/";
+					var target        = variables.tempDir & "nested/sitemap.xml";
+
+					variables.generator.saveToFile( xml, target );
+
+					expect( fileExists( target ) ).toBeTrue();
+					expect( fileRead( target ) ).toBe( xml );
 				} );
 
 			} );

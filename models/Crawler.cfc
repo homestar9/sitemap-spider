@@ -334,9 +334,16 @@ component accessors=true hint="Handles crawling of website URLs" {
         }
 
         // append the page to our sitemap
+        // Store a real date when one was parsed, else fall back per the
+        // lastModFallback setting: "crawlTime" records the crawl timestamp (old
+        // behavior); "omit" (default) records "" so the generator leaves out
+        // <lastmod> for this URL. Parser.getLastModified already returns a real
+        // date or "", so no format guessing happens here.
         appendPage(
             url = resolved.url,
-            lastModified = ( isDate( lastModified ) ? lastModified : now() ),
+            lastModified = isDate( lastModified )
+                ? lastModified
+                : ( settings.lastModFallback == "crawlTime" ? now() : "" ),
             priority = priority,
             depth = depth
         );
@@ -387,7 +394,7 @@ component accessors=true hint="Handles crawling of website URLs" {
 
     private void function appendPage(
         required string url,
-        required date lastModified,
+        required any lastModified, // a date object, or "" when unknown
         required numeric priority,
         required numeric depth
     ) {

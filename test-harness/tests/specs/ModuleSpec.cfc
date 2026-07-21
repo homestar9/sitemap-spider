@@ -53,6 +53,12 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	}
 
 	function afterAll(){
+		// Remove any sitemap file a saveToFile spec wrote.
+		if ( structKeyExists( variables, "savedSitemapFile" )
+			&& len( variables.savedSitemapFile )
+			&& fileExists( variables.savedSitemapFile ) ) {
+			fileDelete( variables.savedSitemapFile );
+		}
 		super.afterAll();
 	}
 
@@ -63,7 +69,13 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			it( "returns a struct with the expected top-level keys", function(){
 				expect( variables.result ).toBeStruct();
-				expect( variables.result ).toHaveKey( "pages,badUrls,processedUrls,disallowedUrls,duration" );
+				expect( variables.result ).toHaveKey( "pages,badUrls,processedUrls,disallowedUrls,duration,filePath,saved" );
+			} );
+
+			it( "does not save a file when no filePath is given", function(){
+				// The shared baseline crawl passed no filePath, so saved is false.
+				expect( variables.result.saved ).toBeFalse();
+				expect( variables.result.filePath ).toBe( "" );
 			} );
 
 			it( "includes the reachable valid pages", function(){
@@ -149,6 +161,23 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				expect( result.pages ).toHaveKey( newUrl );
 				expect( result.pages ).notToHaveKey( oldUrl );
+			} );
+
+		} );
+
+		describe( "saveToFile via create()", function(){
+
+			it( "writes the sitemap to disk and reports saved=true when filePath is given", function(){
+				variables.savedSitemapFile = getTempDirectory() & "sitemap-task10-" & getTickCount() & ".xml";
+
+				var result = getInstance( "sitemapService@sitemap-spider" )
+					.create( url = variables.appRoot, filePath = variables.savedSitemapFile );
+
+				expect( result.saved ).toBeTrue();
+				expect( result.filePath ).toBe( variables.savedSitemapFile );
+				expect( fileExists( variables.savedSitemapFile ) ).toBeTrue();
+				// The file holds the same XML returned in the struct.
+				expect( fileRead( variables.savedSitemapFile ) ).toBe( result.sitemap );
 			} );
 
 		} );

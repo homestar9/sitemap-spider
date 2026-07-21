@@ -6,7 +6,8 @@
  *     normalizes backslashes, and strips the fragment including the "#".
  *   - getCanonicalUrl() reads settings.canonicalHeaderPattern and finds a canonical
  *     entry anywhere in a single- or multi-relation Link header, quoted or unquoted.
- *   - getLastModified() accepts the optional second parsedPage argument.
+ *   - getLastModified() parses the HTTP Last-Modified header (RFC 1123) or a
+ *     meta-tag date into a real date object, or returns "" (task 10).
  *
  * Task 05 adds coverage for getLinks() (nofollow filtering, relative-href
  * resolution, duplicate removal, notAllowedPattern rejection) and isNoFollow()
@@ -146,14 +147,39 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			describe( "getLastModified()", function(){
 
-				it( "accepts an optional parsedPage and returns the Last-Modified header", function(){
+				it( "parses the RFC 1123 Last-Modified header into a real date", function(){
 					var fetchResult = { headers : { "Last-Modified" : "Wed, 21 Oct 2026 07:28:00 GMT" } };
-					expect( variables.parser.getLastModified( fetchResult, {} ) ).toBe( "Wed, 21 Oct 2026 07:28:00 GMT" );
+					var result      = variables.parser.getLastModified( fetchResult, {} );
+					expect( isDate( result ) ).toBeTrue();
+					// The exact day can shift by one in a far-west timezone; year and
+					// month stay put for this mid-month value, so assert those.
+					expect( year( result ) ).toBe( 2026 );
+					expect( month( result ) ).toBe( 10 );
 				} );
 
 				it( "returns empty when there is no Last-Modified header", function(){
 					var fetchResult = { headers : {} };
 					expect( variables.parser.getLastModified( fetchResult ) ).toBe( "" );
+				} );
+
+				it( "falls back to an article:modified_time meta tag when no header is present", function(){
+					var page = variables.parser.parseHtml(
+						'<html><head><meta property="article:modified_time" content="2026-07-15T10:00:00+00:00"></head></html>'
+					);
+					var result = variables.parser.getLastModified( { headers : {} }, page );
+					// This value carries a UTC offset; the exact calendar day after
+					// conversion depends on the server timezone, so only assert it
+					// parsed into a real date, not the day.
+					expect( isDate( result ) ).toBeTrue();
+				} );
+
+				it( "falls back to a name=last-modified meta tag when no header is present", function(){
+					var page = variables.parser.parseHtml(
+						'<html><head><meta name="last-modified" content="2026-01-02"></head></html>'
+					);
+					var result = variables.parser.getLastModified( { headers : {} }, page );
+					expect( isDate( result ) ).toBeTrue();
+					expect( dateFormat( result, "yyyy-mm-dd" ) ).toBe( "2026-01-02" );
 				} );
 
 			} );

@@ -40,15 +40,90 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Gets the last modified date from a fetch result
-     * @fetchResult The fetch result containing headers and body
+     * Gets the last modified date from a fetch result as a real date object.
+     * @fetchResult The fetch result containing headers and body.
+     * @parsedPage The jSoup document for the page (optional). When present, its
+     *   meta tags are read as a fallback when the HTTP header is missing.
+     *
+     * Returns a date object, or "" when no usable date is found. This function
+     * is the single owner of last-modified *parsing*; the SitemapGenerator owns
+     * *formatting*, so it receives a plain date-or-empty value and never has to
+     * guess the format.
+     *
+     * Sources are tried in order:
+     *   1. The HTTP "Last-Modified" response header (RFC 1123, e.g.
+     *      "Wed, 21 Oct 2026 07:28:00 GMT").
+     *   2. A <meta name="last-modified" content="..."> tag.
+     *   3. A <meta property="article:modified_time" content="..."> Open Graph
+     *      tag (ISO 8601).
      */
-    string function getLastModified( required any fetchResult, any parsedPage ) {
+    any function getLastModified( required any fetchResult, any parsedPage ) {
         if ( fetchResult.headers.keyExists( "Last-Modified" ) ) {
-            return fetchResult.headers[ "Last-Modified" ];
+            var headerDate = parseLastModifiedString( fetchResult.headers[ "Last-Modified" ] );
+            if ( isDate( headerDate ) ) {
+                return headerDate;
+            }
         }
-        // TODO: Add support for custom meta tag selectors
+
+        // Fall back to meta tags on the parsed page, in priority order.
+        if ( arguments.keyExists( "parsedPage" ) && !isNull( arguments.parsedPage ) ) {
+            for ( var selector in [ "meta[name=last-modified]", "meta[property=article:modified_time]" ] ) {
+                var meta = arguments.parsedPage.select( selector );
+                if ( meta.size() ) {
+                    var metaDate = parseLastModifiedString( meta.first().attr( "content" ) );
+                    if ( isDate( metaDate ) ) {
+                        return metaDate;
+                    }
+                }
+            }
+        }
+
         return "";
+    }
+
+    /**
+     * Parses a last-modified string into a date object, or returns "" when it
+     * cannot be parsed.
+     * @raw The raw date string (an HTTP header value or a meta-tag content value).
+     *
+     * HTTP dates use RFC 1123 (e.g. "Wed, 21 Oct 2026 07:28:00 GMT"), which
+     * CFML's isDate()/parseDateTime() do not reliably accept across Lucee,
+     * Adobe, and BoxLang. Java's DateTimeFormatter.RFC_1123_DATE_TIME parses it
+     * the same way on every engine, so it is tried first. Meta-tag values are
+     * usually ISO 8601 (e.g. "2026-07-15T10:00:00+00:00"); those go through the
+     * native parseDateTime() when isDate() accepts them, else Java's
+     * OffsetDateTime as a last resort.
+     *
+     * Each Java parse is wrapped in try/catch so an unparseable value returns ""
+     * instead of throwing.
+     */
+    private any function parseLastModifiedString( required string raw ) {
+        var value = trim( arguments.raw );
+        if ( !len( value ) ) {
+            return "";
+        }
+
+        // 1. RFC 1123 HTTP-date (the "... GMT" header format).
+        try {
+            var rfc1123 = createObject( "java", "java.time.format.DateTimeFormatter" ).RFC_1123_DATE_TIME;
+            var zdt = createObject( "java", "java.time.ZonedDateTime" ).parse( javaCast( "string", value ), rfc1123 );
+            return createObject( "java", "java.util.Date" ).init( javaCast( "long", zdt.toInstant().toEpochMilli() ) );
+        } catch ( any e ) {
+            // Not an RFC 1123 date; fall through to the ISO handling below.
+        }
+
+        // 2. ISO 8601 / general date the engine already understands.
+        if ( isDate( value ) ) {
+            return parseDateTime( value );
+        }
+
+        // 3. ISO 8601 with an explicit offset, via Java as a last resort.
+        try {
+            var odt = createObject( "java", "java.time.OffsetDateTime" ).parse( javaCast( "string", value ) );
+            return createObject( "java", "java.util.Date" ).init( javaCast( "long", odt.toInstant().toEpochMilli() ) );
+        } catch ( any e ) {
+            return "";
+        }
     }
 
     string function getCanonicalUrl( required struct fetchResult, any parsedPage ) {
