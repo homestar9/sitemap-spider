@@ -44,6 +44,9 @@ component{
 			loadColdFusionClassPath : true,
 			reloadOnChange : false
 		};
+		// Mapping so the Playwright backend can include cbPlaywright's helper mixin
+		// ("/cbPlaywright/models/PlaywrightMixins.cfm") and read its version file.
+		this.mappings[ "/cbPlaywright" ] = rootPath & "modules/cbPlaywright";
 	}
 
 	// ORM Definitions
