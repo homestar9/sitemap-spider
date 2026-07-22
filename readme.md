@@ -110,7 +110,6 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `waitMs` | `0` | Playwright backend only. Extra fixed wait (ms) after navigation, for content injected by a `setTimeout` with no network activity. |
 | `libPath` | `<modulePath>/lib` | Directory cbjavaloader loads the jsoup jar from. |
 | `htmlContentTypePattern` | `^(text/html\|application/xhtml\+xml)(;.*)?$` | Only responses whose content type matches are parsed for links and canonical URLs. |
-| `canonicalHeaderPattern` | `<([^>]+)>\s*;\s*rel\s*=\s*["']?canonical["']?` | Extracts the canonical URL from an HTTP `Link` header. |
 
 ## Browser backends
 

@@ -4,8 +4,9 @@
  * Covers the behaviors task 04 changed in Parser.cfc:
  *   - cleanUrl() trims ends, encodes interior spaces as %20 (never deletes them),
  *     normalizes backslashes, and strips the fragment including the "#".
- *   - getCanonicalUrl() reads settings.canonicalHeaderPattern and finds a canonical
- *     entry anywhere in a single- or multi-relation Link header, quoted or unquoted.
+ *   - getCanonicalUrl() tokenizes the Link header and finds a canonical entry
+ *     anywhere in a single- or multi-relation Link header, quoted or unquoted, in
+ *     any parameter position (task 17).
  *   - getLastModified() parses the HTTP Last-Modified header (RFC 1123) or a
  *     meta-tag date into a real date object, or returns "" (task 10).
  *
@@ -176,6 +177,35 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					expect( variables.parser.getCanonicalUrl( fetchResult ) ).toBe( "" );
 				} );
 
+				// Task 17 tokenizer hardening: rel may sit after other params, an
+				// exact "canonical" token is required, and commas inside a URL or a
+				// quoted param value must not split an entry.
+
+				it( "finds canonical when rel is not the first parameter", function(){
+					var fetchResult = { headers : { "Link" : '<https://example.test/page.cfm>; type="text/html"; rel="canonical"' } };
+					expect( variables.parser.getCanonicalUrl( fetchResult ) ).toBe( "https://example.test/page.cfm" );
+				} );
+
+				it( "does not treat rel=canonicalize as canonical", function(){
+					var fetchResult = { headers : { "Link" : '<https://example.test/page.cfm>; rel="canonicalize"' } };
+					expect( variables.parser.getCanonicalUrl( fetchResult ) ).toBe( "" );
+				} );
+
+				it( "matches canonical among several space-separated rel tokens", function(){
+					var fetchResult = { headers : { "Link" : '<https://example.test/page.cfm>; rel="alternate canonical"' } };
+					expect( variables.parser.getCanonicalUrl( fetchResult ) ).toBe( "https://example.test/page.cfm" );
+				} );
+
+				it( "keeps a comma inside a URL from splitting the entry", function(){
+					var fetchResult = { headers : { "Link" : '<https://example.test/a,b.cfm>; rel="canonical"' } };
+					expect( variables.parser.getCanonicalUrl( fetchResult ) ).toBe( "https://example.test/a,b.cfm" );
+				} );
+
+				it( "keeps a comma inside a quoted param value from splitting the entry", function(){
+					var fetchResult = { headers : { "Link" : '<https://example.test/prev.cfm>; rel="prev"; title="Smith, John", <https://example.test/page.cfm>; rel="canonical"' } };
+					expect( variables.parser.getCanonicalUrl( fetchResult ) ).toBe( "https://example.test/page.cfm" );
+				} );
+
 			} );
 
 			describe( "getCanonicalUrl() from a parsed page", function(){
@@ -186,6 +216,17 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					);
 					var fetchResult = { headers : {} };
 					expect( variables.parser.getCanonicalUrl( fetchResult, page ) ).toBe( "https://example.test/canonical.cfm" );
+				} );
+
+				it( "resolves a relative canonical href against the parse base URI", function(){
+					// With task 17, parseHtml can carry a base URI, so a relative
+					// <link rel=canonical> resolves to an absolute URL via abs:href.
+					var page = variables.parser.parseHtml(
+						'<html><head><link rel="canonical" href="canonical.cfm"></head></html>',
+						"http://example.test/dir/"
+					);
+					var fetchResult = { headers : {} };
+					expect( variables.parser.getCanonicalUrl( fetchResult, page ) ).toBe( "http://example.test/dir/canonical.cfm" );
 				} );
 
 			} );
@@ -234,6 +275,17 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				it( "resolves a relative href to an absolute URL", function(){
 					var page = parseWithBase(
 						'<a href="page.cfm">link</a>',
+						"http://example.test/dir/"
+					);
+					expect( variables.parser.getLinks( page ) ).toInclude( "http://example.test/dir/page.cfm" );
+				} );
+
+				it( "resolves a relative href when parseHtml is given a base URI and the page has no <base> tag", function(){
+					// Exercises the real production path: task 17 lets parseHtml take
+					// a base URI, so a page with a relative href and no <base> tag
+					// still yields absolute links. Before task 17 this returned [].
+					var page = variables.parser.parseHtml(
+						'<html><body><a href="page.cfm">link</a></body></html>',
 						"http://example.test/dir/"
 					);
 					expect( variables.parser.getLinks( page ) ).toInclude( "http://example.test/dir/page.cfm" );

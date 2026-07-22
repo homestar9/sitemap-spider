@@ -20,9 +20,14 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
      * following the Google / RFC 9309 style. Sitemap lines and "#" comments are
      * ignored.
      *
-     * Not supported (documented limitations): matching against the query string
-     * (path only), case-insensitive paths (paths are matched case-sensitively),
-     * selecting more than one user-agent group, and the Host / Clean-param
+     * The user-agent group is chosen by RFC 9309 rules: the crawler's product
+     * token (the userAgent up to its first "/" or space) is compared for
+     * case-insensitive equality against each group's token, and the "*" group is
+     * the fallback (see applyGroup). Disallow/Allow matching includes the query
+     * string when the caller passes one (see isPathAllowed).
+     *
+     * Not supported (documented limitations): case-insensitive paths (paths are
+     * matched case-sensitively, which RFC 9309 requires) and the Host / Clean-param
      * directives.
      *
      * @content The raw robots.txt body. An empty string yields an allow-all rule
@@ -107,12 +112,13 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
     /**
      * isPathAllowed
      * Returns whether the crawler may fetch the given path. The path should be
-     * site-root-relative and start with "/". Finds every rule whose pattern
-     * matches, then applies longest-match precedence: the rule with the longest
-     * original pattern wins, and a tie is resolved in favor of Allow. A path with
-     * no matching rule is allowed.
+     * site-root-relative and start with "/", and may carry a query string (e.g.
+     * "/list?sort=asc") so a rule like "Disallow: /*?sort=" can match. Finds every
+     * rule whose pattern matches, then applies longest-match precedence: the rule
+     * with the longest original pattern wins, and a tie is resolved in favor of
+     * Allow. A path with no matching rule is allowed.
      *
-     * @path The site-root-relative path to check (e.g. "/private/page.cfm").
+     * @path The site-root-relative path (plus optional "?query") to check.
      */
     boolean function isPathAllowed( required string path ) {
         var bestLength = -1;
@@ -145,21 +151,33 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
 
     /**
      * applyGroup
-     * Picks the rule set for the configured user agent and copies it into
-     * instance state. Prefers a specific group whose token is a case-insensitive
-     * substring of the user agent; otherwise falls back to the "*" group; if
-     * neither exists, leaves the allow-all empty state.
+     * Picks the rule set for the configured user agent and copies it into instance
+     * state, following RFC 9309 section 2.2.1. The crawler's product token is the
+     * user agent up to its first "/" or space (e.g. "MyBot/1.0" -> "MyBot"). A
+     * group whose token equals that product token, compared case-insensitively,
+     * wins. If none matches, the "*" group is used; if that is absent too, the
+     * allow-all empty state is left in place.
+     *
+     * This is stricter than a substring match: a group token "spider" no longer
+     * matches a "sitemap-spider" crawler, so an unrelated group cannot capture the
+     * crawl by accident. Groups are keyed by token in parse(), so two blocks with
+     * the same token already have their rules merged there, which covers RFC 9309's
+     * "combine matching groups" rule for the equality case.
      *
      * @groups The parsed groups keyed by user-agent token.
      * @userAgent The crawler's user agent.
      */
     private void function applyGroup( required struct groups, required string userAgent ) {
+        // Reduce the user agent to its product token: drop the first "/" or space
+        // and everything after it.
+        var productToken = reReplace( arguments.userAgent, "[/ ].*$", "" );
+
         var chosen = "";
         for ( var token in arguments.groups ) {
             if ( token == "*" ) {
                 continue;
             }
-            if ( len( token ) && findNoCase( token, arguments.userAgent ) ) {
+            if ( len( token ) && compareNoCase( token, productToken ) == 0 ) {
                 chosen = token;
                 break;
             }

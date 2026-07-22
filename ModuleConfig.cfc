@@ -65,10 +65,7 @@ component {
             // injected by a setTimeout with no network activity.
             waitStrategy : "networkidle",
             waitMs : 0,
-            htmlContentTypePattern : "^(text/html|application/xhtml\+xml)(;.*)?$", // check for links + canonical URLs
-            // Unanchored so it matches a canonical entry inside a multi-relation Link
-            // header; the optional quotes accept rel=canonical and rel="canonical".
-            canonicalHeaderPattern : '<([^>]+)>\s*;\s*rel\s*=\s*["'']?canonical["'']?'
+            htmlContentTypePattern : "^(text/html|application/xhtml\+xml)(;.*)?$" // check for links + canonical URLs
         };
 	}
 

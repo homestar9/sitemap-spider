@@ -14,14 +14,25 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
 
-    any function parseHtml( required string html ) {
-        return jSoup.parse( arguments.html );
+    /**
+     * Parses HTML into a jSoup document.
+     * @html The raw HTML to parse.
+     * @baseUri The page's own URL. jsoup resolves every relative href/src against
+     *   it, which is what makes link.attr( "abs:href" ) in getLinks return an
+     *   absolute URL for a relative <a href>. A <base href> tag inside the HTML
+     *   overrides this value, so passing the fetched URL is safe for pages that
+     *   have a base tag and fixes the ones that do not. Defaults to "" (no base),
+     *   which resolves relative hrefs to "".
+     */
+    any function parseHtml( required string html, string baseUri = "" ) {
+        return jSoup.parse( arguments.html, arguments.baseUri );
     }
 
     /**
-     * Extracts links from a page
-     * @page The jSoup page object
-     * @baseUrl The base URL of the page for resolving relative URLs
+     * Extracts links from a page.
+     * @page The jSoup document. It must have been parsed with a base URI (see
+     *   parseHtml) or carry a <base href> tag, otherwise a relative href resolves
+     *   to "" and is dropped by isUrlAllowed.
      */
     array function getLinks( required any page ) {
         var links = [ ];
@@ -135,21 +146,116 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             }
         }
 
-        // Next try to get canonical from the Link header, which looks like:
+        // Next try the Link header, which looks like:
         // <https://example.com/page.html>; rel="canonical"
         // A single Link header can carry several comma-separated relations, so the
-        // canonicalHeaderPattern is unanchored: reFind scans the whole header and
-        // finds the canonical entry wherever it sits among the others.
+        // header is tokenized and the canonical entry is found wherever it sits.
         if ( fetchResult.headers.keyExists( "Link" ) ) {
-            var linkHeader = fetchResult.headers[ "Link" ];
-            var match = reFind( settings.canonicalHeaderPattern, linkHeader, 1, true );
-            // pos[2]/len[2] is capture group 1 (the URL inside <...>); pos[2] > 0
-            // means the group matched.
-            if ( match.pos.len() >= 2 && match.pos[ 2 ] > 0 ) {
-                return mid( linkHeader, match.pos[ 2 ], match.len[ 2 ] );
-            }
+            return findCanonicalInLinkHeader( fetchResult.headers[ "Link" ] );
         }
 
+        return "";
+    }
+
+    /**
+     * Splits an HTTP Link header (RFC 8288) into its entries.
+     * @header The raw Link header value.
+     *
+     * Returns an array of { uri, params } structs. uri is the target inside the
+     * angle brackets; params is a struct of the ";name=value" parameters after it,
+     * with names lowercased and any surrounding quotes stripped from values.
+     *
+     * The header is scanned one character at a time so a comma only separates
+     * entries when it is not inside the "<...>" URI and not inside a quoted "..."
+     * value. That keeps a comma in a URL (e.g. /a,b) or in a quoted parameter
+     * (e.g. title="Smith, John") from splitting an entry in the wrong place.
+     */
+    private array function parseLinkHeader( required string header ) {
+        var entries   = [];
+        var current   = "";
+        var inUri     = false; // between "<" and ">"
+        var inQuote   = false; // inside a double-quoted value
+        var chars     = arguments.header;
+
+        for ( var i = 1; i <= len( chars ); i++ ) {
+            var ch = mid( chars, i, 1 );
+            if ( ch == "<" && !inQuote ) {
+                inUri = true;
+            } else if ( ch == ">" && !inQuote ) {
+                inUri = false;
+            } else if ( ch == '"' ) {
+                inQuote = !inQuote;
+            }
+            if ( ch == "," && !inUri && !inQuote ) {
+                entries.append( parseLinkEntry( current ) );
+                current = "";
+            } else {
+                current &= ch;
+            }
+        }
+        if ( len( trim( current ) ) ) {
+            entries.append( parseLinkEntry( current ) );
+        }
+        return entries;
+    }
+
+    /**
+     * Parses one Link header entry ("<uri>; name=value; ...") into { uri, params }.
+     * @entry A single entry, already split off from the full header.
+     *
+     * The URI is read from between the first "<" and ">". Each ";"-separated
+     * parameter after it is stored under its lowercased name, with surrounding
+     * quotes removed from the value. An entry with no "<...>" yields an empty uri.
+     */
+    private struct function parseLinkEntry( required string entry ) {
+        var result = { uri : "", params : {} };
+        var open   = arguments.entry.find( "<" );
+        var close  = arguments.entry.find( ">" );
+        if ( open > 0 && close > open ) {
+            result.uri = trim( mid( arguments.entry, open + 1, close - open - 1 ) );
+        }
+
+        // Everything after ">" is the parameter list.
+        var rest = close > 0 ? mid( arguments.entry, close + 1, len( arguments.entry ) ) : "";
+        for ( var part in listToArray( rest, ";" ) ) {
+            var eqPos = part.find( "=" );
+            if ( eqPos <= 0 ) {
+                continue;
+            }
+            var name  = trim( part.left( eqPos - 1 ) );
+            var value = trim( mid( part, eqPos + 1, len( part ) ) );
+            // Strip one pair of surrounding double quotes if present.
+            if ( len( value ) >= 2 && value.startsWith( '"' ) && value.endsWith( '"' ) ) {
+                value = mid( value, 2, len( value ) - 2 );
+            }
+            if ( len( name ) ) {
+                result.params[ lCase( name ) ] = value;
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Finds the canonical URL in a Link header, or "" when none is present.
+     * @header The raw Link header value.
+     *
+     * Walks the tokenized entries and returns the first uri whose "rel" parameter
+     * has a whitespace-separated token equal to "canonical" (case-insensitive).
+     * Requiring an exact token means a value like rel="canonicalize" is not treated
+     * as canonical, and rel may appear in any parameter position, not just first.
+     * The returned URL is raw; the caller cleans it (see Crawler.crawlUrl).
+     */
+    private string function findCanonicalInLinkHeader( required string header ) {
+        for ( var entry in parseLinkHeader( arguments.header ) ) {
+            if ( !entry.params.keyExists( "rel" ) ) {
+                continue;
+            }
+            for ( var rel in listToArray( entry.params.rel, " " ) ) {
+                if ( compareNoCase( rel, "canonical" ) == 0 ) {
+                    return entry.uri;
+                }
+            }
+        }
         return "";
     }
 

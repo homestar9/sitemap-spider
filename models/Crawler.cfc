@@ -250,13 +250,17 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @url The URL to check
      *
      * Converts the URL to a site-root-relative path (its path with robotsBasePath
-     * removed and a leading "/" restored), then asks the RobotsParser. A URL whose
-     * path does not sit under the base is checked by its full path. When
+     * removed and a leading "/" restored), appends the query string, then asks the
+     * RobotsParser. A URL whose path does not sit under the base is checked by its
+     * full path. The query is included so a rule like "Disallow: /*?sort=" can
+     * match; robotsBasePath is stripped from the path only, never the query. When
      * respectRobotsTxt is false, the rule set is empty so this always returns true.
      */
     private boolean function isAllowedByRobots( required string url ) {
         try {
-            var urlPath = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.url ) ).getPath();
+            var urlObj  = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.url ) );
+            var urlPath = urlObj.getPath();
+            var query   = urlObj.getQuery(); // null when absent
         } catch ( any e ) {
             // A URL java.net.URL cannot parse is left to the other filters; treat
             // it as allowed here rather than throwing from the enqueue path.
@@ -265,7 +269,8 @@ component accessors=true hint="Handles crawling of website URLs" {
         var relativePath = urlPath.startsWith( variables.robotsBasePath )
             ? "/" & urlPath.substring( len( variables.robotsBasePath ) )
             : urlPath;
-        return robotsParser.isPathAllowed( relativePath );
+        var matchTarget = relativePath & ( isNull( query ) || !len( query ) ? "" : "?" & query );
+        return robotsParser.isPathAllowed( matchTarget );
     }
 
     /**
@@ -342,7 +347,10 @@ component accessors=true hint="Handles crawling of website URLs" {
         // if we have HTML content, parse it, and extract links and canonical URL
         if ( fetchResult.keyExists( "html" ) ) {
 
-            var parsedPage = parser.parseHtml( fetchResult.html );
+            // Pass the fetched (final, post-redirect) URL as the base so jsoup
+            // resolves relative hrefs in getLinks even when the page has no
+            // <base href> tag. A page that does have one overrides this.
+            var parsedPage = parser.parseHtml( fetchResult.html, fetchedUrl );
             // let's determine the canonical URL, links
             canonicalUrl = parser.getCanonicalUrl( fetchResult, parsedPage );
             // extract links from the parsed page

@@ -10,6 +10,9 @@
  * longest-match precedence (tie -> Allow), user-agent group selection, and
  * Crawl-delay parsing.
  *
+ * Task 17 adds RFC 9309 user-agent selection (product-token equality, not a
+ * substring of the whole user agent) and query-string matching in isPathAllowed.
+ *
  * Local run recipe:
  *   1. box server start serverConfigFile=server-adobe@2023.json
  *   2. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.RobotsParserSpec"
@@ -109,6 +112,49 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					var p = parserFor( content, "testbot" );
 					expect( p.isPathAllowed( "/blocked.cfm" ) ).toBeFalse();
 					expect( p.isPathAllowed( "/other.cfm" ) ).toBeTrue();
+				} );
+
+				// Task 17 RFC 9309 §2.2.1: match the group token against the
+				// crawler's product token by case-insensitive equality, not a
+				// substring of the whole user agent.
+
+				it( "does not match a group token that is only a substring of the product token", function(){
+					// Group "spider" must NOT capture crawler "sitemap-spider"; it
+					// falls back to the "*" group instead.
+					var content = "User-agent: *#chr(10)#Disallow: /star.cfm#chr(10)##chr(10)#User-agent: spider#chr(10)#Disallow: /spider.cfm";
+					var p = parserFor( content, "sitemap-spider" );
+					expect( p.isPathAllowed( "/star.cfm" ) ).toBeFalse();   // "*" group applies
+					expect( p.isPathAllowed( "/spider.cfm" ) ).toBeTrue();  // "spider" group ignored
+				} );
+
+				it( "matches the group token case-insensitively against the exact product token", function(){
+					var content = "User-agent: SiteMap-Spider#chr(10)#Disallow: /admin.cfm";
+					var p = parserFor( content, "sitemap-spider" );
+					expect( p.isPathAllowed( "/admin.cfm" ) ).toBeFalse();
+				} );
+
+				it( "reduces a user agent with a /version suffix to its product token", function(){
+					var content = "User-agent: mybot#chr(10)#Disallow: /admin.cfm";
+					var p = parserFor( content, "mybot/1.0 (+http://example.test/bot)" );
+					expect( p.isPathAllowed( "/admin.cfm" ) ).toBeFalse();
+				} );
+
+			} );
+
+			describe( "isPathAllowed() query-string matching", function(){
+
+				// Task 17: the caller may pass "path?query", so a rule that targets
+				// the query string can match.
+
+				it( "blocks a path whose query matches a query pattern", function(){
+					var p = parserFor( "User-agent: *#chr(10)#Disallow: /*?sort=" );
+					expect( p.isPathAllowed( "/list?sort=asc" ) ).toBeFalse();
+					expect( p.isPathAllowed( "/list?page=2" ) ).toBeTrue();
+				} );
+
+				it( "still blocks path+query under a plain path prefix", function(){
+					var p = parserFor( "User-agent: *#chr(10)#Disallow: /private" );
+					expect( p.isPathAllowed( "/private/page.cfm?x=1" ) ).toBeFalse();
 				} );
 
 			} );
