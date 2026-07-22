@@ -9,7 +9,7 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * Initializes the crawler
      *
-     * processedUrls, queuedUrls, and excludeUrls are structs used as sets: the
+     * processedUrls, queuedUrls, and excludedUrls are structs used as sets: the
      * URL is the key, so membership is an O(1) keyExists() check instead of an
      * O(n) array scan. The queue itself stays an ordered array because
      * breadth-first traversal needs FIFO order.
@@ -34,7 +34,7 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.queue = []; // ordered FIFO of { url, depth } still to crawl
         variables.queuedUrls = {}; // set of URLs currently in the queue
         variables.hostName = "";
-        variables.excludeUrls = {}; // set of URLs explicitly excluded by the user
+        variables.excludedUrls = {}; // set of URLs explicitly excluded by the user
         variables.badUrls = {}; // urls that couldn't be fetched
         variables.disallowedUrls = {}; // set of URLs skipped because robots.txt disallows them
         // robots.txt state, (re)loaded at the start of each crawl().
@@ -97,9 +97,9 @@ component accessors=true hint="Handles crawling of website URLs" {
         // Turn the excluded-URL array into a set for O(1) membership checks. This
         // set is read-only once the crawl starts, so it stays a plain CFML struct
         // even in async mode (concurrent reads are safe).
-        variables.excludeUrls = {};
+        variables.excludedUrls = {};
         for ( var excluded in arguments.excludeUrls ) {
-            variables.excludeUrls[ excluded ] = true;
+            variables.excludedUrls[ excluded ] = true;
         }
 
         // Decide whether this crawl runs in parallel. Async is honored only when
@@ -123,17 +123,22 @@ component accessors=true hint="Handles crawling of website URLs" {
             initAsyncState();
         }
 
-        // Enqueue valid URLs
-        arguments.urls.each( function( url ) {
+        // Enqueue valid URLs. A plain for loop is used instead of urls.each() with a
+        // closure: a closure captures this crawl()'s arguments scope, and on Lucee a
+        // later variables-scope read inside the closure's call chain can resolve to a
+        // same-named argument (the excludeUrls argument shadowed variables.excludedUrls
+        // and broke isUrlExcluded). The for loop has no captured scope, so that
+        // cross-engine hazard cannot happen.
+        for ( var seedUrl in arguments.urls ) {
 
-            logger.info( "CRAWLING:" & arguments.url );
+            logger.info( "CRAWLING:" & seedUrl );
 
-            if ( shouldEnqueue( arguments.url ) ) {
-                enqueue( arguments.url, 0 );
+            if ( shouldEnqueue( seedUrl ) ) {
+                enqueue( seedUrl, 0 );
             } else {
-                logger.warn( "Invalid or non-matching URL skipped: #arguments.url#" );
+                logger.warn( "Invalid or non-matching URL skipped: #seedUrl#" );
             }
-        } );
+        }
 
         // Drain the frontier. The finally releases any resources the browser holds
         // for this crawl (the Playwright backend closes its browser process here;
@@ -547,7 +552,7 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @url URL to check
      */
     private boolean function isUrlExcluded( required string url ) {
-        return variables.excludeUrls.keyExists( arguments.url );
+        return variables.excludedUrls.keyExists( arguments.url );
     }
 
     private function getPriority( required numeric depth ) {

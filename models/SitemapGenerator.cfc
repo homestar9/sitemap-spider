@@ -23,8 +23,8 @@ component {
      */
     function generate( required struct pages ) {
         var xml = variables.xmlHeader & variables.urlsetOpen;
-        pages.each( ( url, data ) => {
-            xml &= buildUrlEntry( url, data );
+        pages.each( ( pageUrl, data ) => {
+            xml &= buildUrlEntry( pageUrl, data );
         } );
         xml &= variables.urlsetClose;
         return xml;
@@ -70,9 +70,9 @@ component {
         var chunks  = [];
         var current = ""; // becomes a struct once the first entry is placed
 
-        for ( var url in arguments.pages ) {
-            var data       = arguments.pages[ url ];
-            var entry      = buildUrlEntry( url, data );
+        for ( var pageUrl in arguments.pages ) {
+            var data       = arguments.pages[ pageUrl ];
+            var entry      = buildUrlEntry( pageUrl, data );
             var entryBytes = byteLength( entry );
 
             // Roll to a new chunk only when the current one already holds an

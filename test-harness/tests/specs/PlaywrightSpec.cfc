@@ -28,9 +28,18 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
     // Decide skip vs run at construction, before run() registers the specs. The
     // it() skip argument is evaluated during registration, which happens before
-    // beforeAll, so this cannot be set in beforeAll. The check only needs the JVM
-    // and the file system, so it is safe here.
-    variables.playwrightAvailable = driverIsInstalled();
+    // beforeAll, so this cannot be set in beforeAll. The check only needs the JVM,
+    // the file system, and the server scope, so it is safe here.
+    //
+    // Playwright is skipped when its driver is missing OR the engine is BoxLang.
+    // The Playwright backend pulls in the cbPlaywright helpers with a CFML include
+    // (models/browsers/Playwright.cfc), and BoxLang does not expose functions
+    // defined in an included template as callable methods, so the backend's first
+    // call (beforeAll) fails with "Method 'beforeAll' not found". Until cbPlaywright
+    // supports BoxLang, treat BoxLang as an engine that cannot run Playwright and
+    // skip these specs there, the same way a missing driver skips them. See the
+    // task 15 follow-up note in plans/00-overview.md.
+    variables.playwrightAvailable = driverIsInstalled() && !isBoxLang();
 
     function beforeAll(){
         super.beforeAll();
@@ -131,6 +140,17 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
             driverDir = javaSystem.getProperty( "user.home" ) & fs & ".CommandBox" & fs & "cfml" & fs & "modules" & fs & "commandbox-cbplaywright" & fs & "driver";
         }
         return directoryExists( driverDir );
+    }
+
+    /**
+     * Returns true when the CFML engine is BoxLang. BoxLang populates a "boxlang"
+     * key in the server scope (its ColdFusion-compat shim otherwise reports the
+     * product name as "Lucee", so that name cannot be used to tell them apart).
+     * Used to skip the Playwright specs, since the cbPlaywright include-based
+     * mixin does not load on BoxLang.
+     */
+    private boolean function isBoxLang(){
+        return server.keyExists( "boxlang" );
     }
 
 }

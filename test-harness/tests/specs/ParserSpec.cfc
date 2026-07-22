@@ -213,8 +213,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					);
 					var links = variables.parser.getLinks( page );
 					var occurrences = 0;
-					for ( var url in links ) {
-						if ( url == "http://example.test/dup.cfm" ) {
+					for ( var link in links ) {
+						if ( link == "http://example.test/dup.cfm" ) {
 							occurrences++;
 						}
 					}
