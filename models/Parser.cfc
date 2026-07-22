@@ -208,6 +208,11 @@ component accessors=true hint="Parses HTML content to extract links and metadata
      * Encoding " " as "%20" after trimming never touches an existing %20, so an
      * already-encoded URL is preserved. The steps are idempotent, so calling
      * cleanUrl again on an already-cleaned URL returns the same string.
+     *
+     * The final step applies the normalization policy (see normalizeUrl):
+     * lowercase scheme + host, and strip session/tracking params. This runs last
+     * so every URL that enters the crawl's dedup sets or the sitemap is already
+     * normalized.
      */
     string function cleanUrl( required string url ) {
         var cleaned = trim( arguments.url );          // drop leading/trailing whitespace
@@ -219,7 +224,97 @@ component accessors=true hint="Parses HTML content to extract links and metadata
         if ( fragmentIndex > 0 ) {
             cleaned = cleaned.left( fragmentIndex - 1 );
         }
-        return cleaned;
+        return normalizeUrl( cleaned );
+    }
+
+    /**
+     * Applies the crawl's URL normalization policy so the same page always maps
+     * to one dedup key and one sitemap entry, and session tokens never leak into
+     * recorded URLs.
+     * @url A URL whose string form is already cleaned (see cleanUrl).
+     *
+     * What it does:
+     *   - Lowercases the scheme and host (both are case-insensitive per spec).
+     *   - Preserves path case (URL paths ARE case-sensitive per spec).
+     *   - Keeps userinfo, port, and query values unchanged.
+     *   - Strips the session/tracking params named in settings.sessionParams from
+     *     the query string, and strips a ";jsessionid=..." path parameter.
+     *
+     * Only http and https URLs with a host are transformed. Anything java.net.URL
+     * cannot parse (a relative href, mailto:, tel:, javascript:) is returned
+     * unchanged, because those are filtered later by isUrlAllowed and must pass
+     * through here untouched. The rebuild is idempotent, so re-normalizing an
+     * already-normalized URL returns the same string.
+     */
+    private string function normalizeUrl( required string url ) {
+        try {
+            var urlObj   = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.url ) );
+            var protocol = urlObj.getProtocol();
+            var host     = urlObj.getHost();
+
+            // Only http/https URLs with a host get normalized; leave the rest as-is.
+            if ( ( protocol != "http" && protocol != "https" ) || !len( host ) ) {
+                return arguments.url;
+            }
+
+            var userInfo = urlObj.getUserInfo(); // null when absent
+            var port     = urlObj.getPort();     // -1 when no explicit port
+            var path     = urlObj.getPath();     // "" when absent
+            var query    = urlObj.getQuery();    // null when absent
+
+            // Strip a ";jsessionid=..." path parameter (servlet session token),
+            // case-insensitive, from any path segment.
+            path = reReplaceNoCase( path, ";jsessionid=[^/]*", "", "all" );
+
+            var rebuilt = lCase( protocol ) & "://";
+            if ( !isNull( userInfo ) && len( userInfo ) ) {
+                rebuilt &= userInfo & "@";
+            }
+            rebuilt &= lCase( host );
+            if ( port != -1 ) {
+                rebuilt &= ":" & port;
+            }
+            rebuilt &= path;
+
+            var cleanQuery = isNull( query ) ? "" : stripSessionParams( query );
+            if ( len( cleanQuery ) ) {
+                rebuilt &= "?" & cleanQuery;
+            }
+            return rebuilt;
+        } catch ( any e ) {
+            // Not parseable as an absolute URL (relative, mailto:, tel:, ...).
+            // Leave it to the other filters; return unchanged.
+            return arguments.url;
+        }
+    }
+
+    /**
+     * Removes the session/tracking params named in settings.sessionParams from a
+     * query string and returns the surviving pairs joined with "&" (or "" when
+     * none survive).
+     * @query The raw query string (no leading "?").
+     *
+     * Param names are matched case-insensitively: the drop list is a CFML struct,
+     * whose keyExists() is itself case-insensitive, so "CFID" matches the "cfid"
+     * key. Only the name (the part before "=") is compared; values are untouched.
+     */
+    private string function stripSessionParams( required string query ) {
+        if ( !len( arguments.query ) ) {
+            return "";
+        }
+        var drop = {};
+        for ( var name in listToArray( settings.sessionParams ) ) {
+            drop[ trim( name ) ] = true;
+        }
+        var kept = [];
+        for ( var pair in listToArray( arguments.query, "&" ) ) {
+            var eqPos    = pair.find( "=" );
+            var paramKey = eqPos > 0 ? pair.left( eqPos - 1 ) : pair;
+            if ( !drop.keyExists( paramKey ) ) {
+                kept.append( pair );
+            }
+        }
+        return kept.toList( "&" );
     }
 
     /**

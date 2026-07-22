@@ -9,10 +9,11 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * Initializes the crawler
      *
-     * processedUrls, queuedUrls, and excludedUrls are structs used as sets: the
-     * URL is the key, so membership is an O(1) keyExists() check instead of an
-     * O(n) array scan. The queue itself stays an ordered array because
-     * breadth-first traversal needs FIFO order.
+     * processedUrls, queuedUrls, and excludedUrls are used as sets: the URL is
+     * the key, so membership is an O(1) lookup instead of an O(n) array scan.
+     * processedUrls and queuedUrls are Java maps (case-sensitive keys, matching
+     * the async path); excludedUrls stays a CFML struct. The queue itself stays
+     * an ordered array because breadth-first traversal needs FIFO order.
      */
     function init() {
         resetState();
@@ -30,9 +31,15 @@ component accessors=true hint="Handles crawling of website URLs" {
      */
     private void function resetState() {
         variables.pages = {};
-        variables.processedUrls = {}; // set of URLs already crawled
+        // The two dedup gates use Java LinkedHashMaps, not CFML structs, so their
+        // keys compare with case-sensitive String.equals — the same rule the
+        // async ConcurrentHashMaps use. This makes sync and async agree on which
+        // URLs are fetched and enqueued (a CFML struct's case-insensitive keys
+        // would merge URLs that differ only in path case, which async keeps
+        // separate). initAsyncState() swaps processedUrls for a ConcurrentHashMap.
+        variables.processedUrls = createObject( "java", "java.util.LinkedHashMap" ).init(); // set of URLs already crawled
         variables.queue = []; // ordered FIFO of { url, depth } still to crawl
-        variables.queuedUrls = {}; // set of URLs currently in the queue
+        variables.queuedUrls = createObject( "java", "java.util.LinkedHashMap" ).init(); // set of URLs currently in the queue
         variables.hostName = "";
         variables.excludedUrls = {}; // set of URLs explicitly excluded by the user
         variables.badUrls = {}; // urls that couldn't be fetched
@@ -68,10 +75,10 @@ component accessors=true hint="Handles crawling of website URLs" {
      *           browser backend reports supportsParallel(); otherwise the crawl
      *           runs single-threaded (a downgrade is logged).
      * @return A struct with the crawled pages, bad URLs, and processed URLs.
-     *         processedUrls is returned as an array (via structKeyArray) even
-     *         though it is tracked internally as a set, so callers keep a simple
-     *         list shape. A runAsync key reports whether the crawl actually ran
-     *         in parallel.
+     *         processedUrls is returned as an array (its map keys) even though it
+     *         is tracked internally as a set, so callers keep a simple list
+     *         shape. A runAsync key reports whether the crawl actually ran in
+     *         parallel.
      */
     struct function crawl(
         required array urls,
@@ -87,19 +94,24 @@ component accessors=true hint="Handles crawling of website URLs" {
         if ( arrayLen( arguments.urls ) == 0 ) {
             throw( type="InvalidArgumentException", message="At least one starting URL is required" );
         }
-        variables.hostName = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.urls[ 1 ] ) ).getHost( );
+        // Lowercase the host so it matches the now-lowercased host in every
+        // cleaned URL (Parser.normalizeUrl lowercases scheme + host).
+        variables.hostName = lCase( createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.urls[ 1 ] ) ).getHost( ) );
         parser.setHostName( variables.hostName );
 
         // Load robots.txt for the first seed URL. Sets robotsBasePath and the
         // effective crawl delay used below.
         loadRobots( arguments.urls[ 1 ] );
 
-        // Turn the excluded-URL array into a set for O(1) membership checks. This
-        // set is read-only once the crawl starts, so it stays a plain CFML struct
-        // even in async mode (concurrent reads are safe).
+        // Turn the excluded-URL array into a set for O(1) membership checks. Each
+        // excluded URL is cleaned first so it compares against the normalized
+        // crawl URLs (isUrlExcluded checks a cleaned URL); a raw exclusion would
+        // otherwise never match. This set is read-only once the crawl starts, so
+        // it stays a plain CFML struct even in async mode (concurrent reads are
+        // safe).
         variables.excludedUrls = {};
         for ( var excluded in arguments.excludeUrls ) {
-            variables.excludedUrls[ excluded ] = true;
+            variables.excludedUrls[ parser.cleanUrl( excluded ) ] = true;
         }
 
         // Decide whether this crawl runs in parallel. Async is honored only when
@@ -364,9 +376,11 @@ component accessors=true hint="Handles crawling of website URLs" {
         // The page is recorded under the canonical URL if it declares one, else
         // under the final URL jsoup landed on after any HTTP redirect, else the URL
         // we asked for. Canonical wins because it is the site's own authoritative
-        // choice. resolveEffectiveUrl runs the shared dedupe checks and signals
-        // whether to skip recording this page.
-        var effectiveUrl = len( canonicalUrl ) ? canonicalUrl : fetchedUrl;
+        // choice. The canonical URL is cleaned here (fetchedUrl already is) so a
+        // canonical with a mixed-case host or a session token is normalized
+        // before the dedupe checks. resolveEffectiveUrl runs the shared dedupe
+        // checks and signals whether to skip recording this page.
+        var effectiveUrl = len( canonicalUrl ) ? parser.cleanUrl( canonicalUrl ) : fetchedUrl;
         var resolved = resolveEffectiveUrl( normalizedUrl, effectiveUrl );
         if ( resolved.skip ) {
             return;
@@ -508,7 +522,7 @@ component accessors=true hint="Handles crawling of website URLs" {
                 url = arguments.url,
                 depth = arguments.depth
             } );
-            variables.queuedUrls[ arguments.url ] = true;
+            variables.queuedUrls.put( arguments.url, true );
         }
     }
 
@@ -521,7 +535,7 @@ component accessors=true hint="Handles crawling of website URLs" {
         if ( variables.queue.len() ) {
             var current = variables.queue[ 1 ];
             variables.queue.deleteAt( 1 );
-            variables.queuedUrls.delete( current.url );
+            variables.queuedUrls.remove( current.url );
             return current;
         }
         return javaCast( "null", 0 );
@@ -532,19 +546,18 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @url The URL to check
      */
     private boolean function isUrlQueued( required string url ) {
-        return variables.queuedUrls.keyExists( arguments.url );
+        return variables.queuedUrls.containsKey( arguments.url );
     }
 
     /**
-     * Check if URL was already processed. Reads the CFML struct in sync mode and
-     * the concurrent map in async mode. Only the sync enqueue path calls this; the
-     * async path claims through claimProcessed instead.
+     * Check if URL was already processed. processedUrls is a java.util.Map in
+     * both modes (a LinkedHashMap in sync, a ConcurrentHashMap in async), so the
+     * same containsKey() call works for both. Only the sync enqueue path calls
+     * this; the async path claims through claimProcessed instead.
      * @url URL to check
      */
     private boolean function isUrlProcessed( required string url ) {
-        return variables.async
-            ? variables.processedUrls.containsKey( arguments.url )
-            : variables.processedUrls.keyExists( arguments.url );
+        return variables.processedUrls.containsKey( arguments.url );
     }
 
     /**
@@ -590,19 +603,14 @@ component accessors=true hint="Handles crawling of website URLs" {
      * caller should crawl/record it), false when it was already claimed.
      * @url The URL to claim
      *
-     * In async mode the claim is a single atomic putIfAbsent on the concurrent
-     * map, so exactly one worker ever gets true for a given URL. In sync mode it
-     * is the plain check-then-set, which is safe on one thread.
+     * processedUrls is a java.util.Map in both modes, so a single putIfAbsent
+     * claims the URL either way: it returns null only for the first caller to add
+     * a given key. On the async ConcurrentHashMap that is atomic (exactly one
+     * worker ever gets true); on the sync LinkedHashMap it is a plain
+     * check-then-set, which is safe on one thread.
      */
     private boolean function claimProcessed( required string url ) {
-        if ( variables.async ) {
-            return isNull( variables.processedUrls.putIfAbsent( arguments.url, true ) );
-        }
-        if ( variables.processedUrls.keyExists( arguments.url ) ) {
-            return false;
-        }
-        variables.processedUrls[ arguments.url ] = true;
-        return true;
+        return isNull( variables.processedUrls.putIfAbsent( arguments.url, true ) );
     }
 
     /**
@@ -719,7 +727,10 @@ component accessors=true hint="Handles crawling of website URLs" {
         return {
             "pages": variables.pages,
             "badUrls": variables.badUrls,
-            "processedUrls": structKeyArray( variables.processedUrls ),
+            // processedUrls is a java.util.LinkedHashMap in sync mode, so its keys
+            // come out via javaMapKeys (not structKeyArray). disallowedUrls is
+            // still a CFML struct in sync mode.
+            "processedUrls": javaMapKeys( variables.processedUrls ),
             "disallowedUrls": structKeyArray( variables.disallowedUrls ),
             "runAsync": false
         };

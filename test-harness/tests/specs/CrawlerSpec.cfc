@@ -320,6 +320,82 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 		} );
+
+		// Task 16: the normalization policy (Parser.normalizeUrl, folded into
+		// cleanUrl) must produce the same dedup and recorded URLs in both the sync
+		// and parallel crawl paths. Each scenario is asserted for runAsync=false
+		// and runAsync=true. The scenarios are written as explicit pairs rather
+		// than a loop so each it() closure captures its own mode with no
+		// loop-variable-capture hazard.
+		describe( "crawl() URL normalization", function(){
+
+			// Two anchors that differ only in host case normalize to the same URL,
+			// so the page is fetched and recorded exactly once. Registering only the
+			// normalized page means a fetch of any un-normalized variant would throw
+			// FakeBrowser.UnknownUrl and fail the test loudly.
+			it( "dedups a URL differing only in host case (sync)", function(){
+				var dupUrl = variables.root & "dup.cfm"; // http://example.test/dup.cfm
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( "http://EXAMPLE.test/dup.cfm" ) & link( dupUrl ) );
+				ctx.fake.addPage( dupUrl, "" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.pages ).toHaveKey( dupUrl );
+				// root + dup only; the uppercase-host variant is not a second entry.
+				expect( structCount( result.pages ) ).toBe( 2 );
+			} );
+
+			it( "dedups a URL differing only in host case (parallel)", function(){
+				var dupUrl = variables.root & "dup.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( "http://EXAMPLE.test/dup.cfm" ) & link( dupUrl ) );
+				ctx.fake.addPage( dupUrl, "" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
+
+				expect( result.runAsync ).toBeTrue();
+				expect( result.pages ).toHaveKey( dupUrl );
+				expect( structCount( result.pages ) ).toBe( 2 );
+			} );
+
+			// A redirect whose final URL carries CFID/CFTOKEN must be recorded under
+			// the clean URL, so session tokens never leak into the sitemap.
+			it( "records a redirect target's clean URL, stripping session tokens (sync)", function(){
+				var oldUrl   = variables.root & "old.cfm";
+				var cleanNew = variables.root & "new.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( oldUrl ) );
+				// The fetch of oldUrl follows a 30x to new.cfm carrying session tokens.
+				ctx.fake.addPage( oldUrl, "", {}, cleanNew & "?CFID=9&CFTOKEN=8" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.pages ).toHaveKey( cleanNew );
+				expect( result.pages ).notToHaveKey( cleanNew & "?CFID=9&CFTOKEN=8" );
+				expect( result.pages ).notToHaveKey( oldUrl );
+			} );
+
+			it( "records a redirect target's clean URL, stripping session tokens (parallel)", function(){
+				var oldUrl   = variables.root & "old.cfm";
+				var cleanNew = variables.root & "new.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( oldUrl ) );
+				ctx.fake.addPage( oldUrl, "", {}, cleanNew & "?CFID=9&CFTOKEN=8" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
+
+				expect( result.runAsync ).toBeTrue();
+				expect( result.pages ).toHaveKey( cleanNew );
+				expect( result.pages ).notToHaveKey( cleanNew & "?CFID=9&CFTOKEN=8" );
+				expect( result.pages ).notToHaveKey( oldUrl );
+			} );
+
+		} );
 	}
 
 }

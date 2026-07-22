@@ -87,6 +87,51 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			} );
 
+			// Task 16 folded the URL normalization policy into cleanUrl's final
+			// step (Parser.normalizeUrl): lowercase scheme + host, preserve path
+			// case, strip session/tracking params from the query and a
+			// ";jsessionid=" path parameter.
+			describe( "cleanUrl() URL normalization", function(){
+
+				it( "lowercases the scheme and host but preserves path case", function(){
+					expect( variables.parser.cleanUrl( "HTTP://EXAMPLE.TEST/MyPage.CFM" ) )
+						.toBe( "http://example.test/MyPage.CFM" );
+				} );
+
+				it( "strips CFID/CFTOKEN and drops the now-empty query", function(){
+					expect( variables.parser.cleanUrl( "http://example.test/a.cfm?CFID=1&CFTOKEN=2" ) )
+						.toBe( "http://example.test/a.cfm" );
+				} );
+
+				it( "strips jsessionid from the query but keeps other params", function(){
+					expect( variables.parser.cleanUrl( "http://example.test/a.cfm?jsessionid=X&id=5" ) )
+						.toBe( "http://example.test/a.cfm?id=5" );
+				} );
+
+				it( "strips a ;jsessionid= path parameter", function(){
+					expect( variables.parser.cleanUrl( "http://example.test/a.cfm;jsessionid=ABC123" ) )
+						.toBe( "http://example.test/a.cfm" );
+				} );
+
+				it( "strips a tracking param but keeps a normal one", function(){
+					expect( variables.parser.cleanUrl( "http://example.test/a.cfm?utm_source=news&id=5" ) )
+						.toBe( "http://example.test/a.cfm?id=5" );
+				} );
+
+				it( "leaves a non-http scheme untouched", function(){
+					// mailto: is filtered later by isUrlAllowed, so cleanUrl must pass
+					// it through without trying to normalize it.
+					expect( variables.parser.cleanUrl( "mailto:Support@example.test" ) )
+						.toBe( "mailto:Support@example.test" );
+				} );
+
+				it( "is idempotent on an already-normalized URL", function(){
+					var once = variables.parser.cleanUrl( "HTTP://EXAMPLE.TEST/MyPage.CFM?jsessionid=Z&id=5" );
+					expect( variables.parser.cleanUrl( once ) ).toBe( once );
+				} );
+
+			} );
+
 			describe( "isUrlAllowed()", function(){
 
 				// Moved from CrawlerSpec in task 06: Parser is now the single owner of

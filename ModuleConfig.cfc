@@ -41,6 +41,10 @@ component {
             userAgent : "sitemap-spider", // matched against robots User-agent groups and sent on fetches
             maxCrawlDelay : 10, // cap (seconds) on the robots Crawl-delay actually applied between fetches
             notAllowedPattern : "\.(png|webp|svg|gif|js|css|jpg|jpeg)$|javascript:|mailto:|tel:",
+            // Query-param and ;jsessionid path-param names stripped by
+            // Parser.normalizeUrl so session tokens and tracking params never
+            // reach dedup keys or the sitemap. Matched case-insensitively.
+            sessionParams : "cfid,cftoken,jsessionid,utm_source,utm_medium,utm_campaign,utm_term,utm_content,fbclid,gclid",
             priority : 1.0,
             priorityDecrement : 0.1, // each depth reduces priority by this much
             // sitemaps.org hard limits per sitemap file. When a crawl exceeds
