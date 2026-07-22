@@ -4,14 +4,18 @@
  * crawler. Selected by setting the browserDsl module setting to
  * "Playwright@sitemap-spider".
  *
- * The cbPlaywright helper mixin is included below. It owns the Playwright
- * lifecycle: beforeAll() resolves the browser driver, checks the driver version
- * against cbPlaywright's playwright.version, and creates variables.playwright;
- * afterAll() closes it. launchBrowser() and navigate() wrap the Java option
- * objects. This backend adds only the crawl-specific parts: a configurable wait
- * for JavaScript, the result-struct shape, and robots.txt fetching. Using the
- * mixin needs a "/cbPlaywright" mapping and the Playwright jars on the class path;
- * the host Application.cfc sets both (see the test-harness Application.cfc).
+ * The cbPlaywright helper mixin is included below for its wrappers around the
+ * Playwright Java option objects (launchBrowser(), navigate()). Its lifecycle
+ * functions beforeAll()/afterAll() are NOT used: they call super.beforeAll() /
+ * super.afterAll() and swallow the resulting "method not found" error by
+ * matching Lucee's and Adobe's message wording only, so on BoxLang (different
+ * wording) they rethrow and every fetch fails. This backend does its own driver
+ * init (initPlaywright) and close (shutdown) instead, replicating the mixin's
+ * driver resolution and version check without the super calls. This backend
+ * adds the crawl-specific parts: a configurable wait for JavaScript, the
+ * result-struct shape, and robots.txt fetching. Using the mixin needs a
+ * "/cbPlaywright" mapping and the Playwright jars on the class path; the host
+ * Application.cfc sets both (see the test-harness Application.cfc).
  *
  * Lifecycle: the Playwright instance, one browser, one context, and one page are
  * created lazily on the first fetch and reused for the whole crawl (each fetch
@@ -104,8 +108,6 @@ component
      * Crawler when a crawl finishes. Safe to call when nothing was started and
      * safe to call more than once; clears the cached handles so a later crawl on
      * the same instance re-initializes.
-     *
-     * afterAll() is the cbPlaywright mixin helper that closes variables.playwright.
      */
     void function shutdown() {
         if ( structKeyExists( variables, "browserInstance" ) ) {
@@ -117,10 +119,11 @@ component
         }
         if ( structKeyExists( variables, "playwright" ) ) {
             try {
-                afterAll();
+                variables.playwright.close();
             } catch ( any e ) {
                 logger.warn( "Error closing Playwright: #e.message#" );
             }
+            structDelete( variables, "playwright" );
         }
         structDelete( variables, "page" );
         structDelete( variables, "context" );
@@ -142,21 +145,69 @@ component
      * browser, a context, and one page on first use. All are reused for the whole
      * crawl; each fetch navigates the same page.
      *
-     * beforeAll() and launchBrowser() are cbPlaywright mixin helpers. beforeAll()
-     * throws a clear error when the driver is missing or its version does not
-     * match cbPlaywright, which is the "optional dependency not installed" signal.
+     * initPlaywright() throws a clear error when the driver is missing or its
+     * version does not match cbPlaywright, which is the "optional dependency not
+     * installed" signal. launchBrowser() is a cbPlaywright mixin helper.
      */
     private any function getPage() {
         if ( structKeyExists( variables, "page" ) ) {
             return variables.page;
         }
         if ( !structKeyExists( variables, "playwright" ) ) {
-            beforeAll();
+            initPlaywright();
         }
         variables.browserInstance = launchBrowser( variables.playwright.chromium(), true );
         variables.context = variables.browserInstance.newContext();
         variables.page = variables.context.newPage();
         return variables.page;
+    }
+
+    /**
+     * Creates the Playwright driver instance (variables.playwright).
+     *
+     * This replicates the driver setup from cbPlaywright's mixin beforeAll()
+     * WITHOUT its super.beforeAll() call. The mixin swallows the "method not
+     * found" error from that super call by matching Lucee's and Adobe's message
+     * wording; BoxLang's wording is not matched, so the mixin's beforeAll()
+     * rethrows there and the backend cannot start. Until that is fixed upstream,
+     * this method does the same work directly: resolve the driver directory
+     * (CBPLAYWRIGHT_DRIVER_DIR, or the commandbox-cbplaywright default), check
+     * the driver version against cbPlaywright's playwright.version file, point
+     * the playwright.cli.dir system property at the driver, and create the
+     * Playwright instance. Throws when the driver is missing or its version does
+     * not match what cbPlaywright expects.
+     */
+    private void function initPlaywright() {
+        var javaSystem = createObject( "java", "java.lang.System" );
+        var expectedVersion = fileRead( expandPath( "/cbPlaywright/playwright.version" ) );
+
+        var driverDir = javaSystem.getEnv( "CBPLAYWRIGHT_DRIVER_DIR" );
+        if ( isNull( driverDir ) ) {
+            var fileSeparator = javaSystem.getProperty( "file.separator" );
+            driverDir = javaSystem.getProperty( "user.home" ) & fileSeparator & ".CommandBox" & fileSeparator
+                & "cfml" & fileSeparator & "modules" & fileSeparator & "commandbox-cbplaywright" & fileSeparator & "driver";
+        }
+        if ( right( driverDir, 1 ) != "/" ) {
+            driverDir &= "/";
+        }
+        if ( !directoryExists( driverDir ) ) {
+            throw(
+                message = "Playwright driver directory does not exist: [#driverDir#]",
+                detail = "Install it with commandbox-cbplaywright, or point CBPLAYWRIGHT_DRIVER_DIR at an installed driver."
+            );
+        }
+
+        var driverVersion = deserializeJSON( fileRead( driverDir & "package/package.json" ) ).version;
+        if ( expectedVersion != driverVersion ) {
+            throw(
+                message = "Incompatible Playwright driver version. cbPlaywright expects [#expectedVersion#] but the driver is [#driverVersion#].",
+                detail = "CommandBox users can run `cbplaywright driver install #expectedVersion# --force`."
+            );
+        }
+
+        javaSystem.setProperty( "playwright.cli.dir", driverDir );
+        var createOptions = createObject( "java", "com.microsoft.playwright.Playwright$CreateOptions" ).init();
+        variables.playwright = createObject( "java", "com.microsoft.playwright.impl.PlaywrightImpl" ).create( createOptions );
     }
 
     /**

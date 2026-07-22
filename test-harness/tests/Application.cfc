@@ -94,9 +94,25 @@ component{
 		request.coldBoxVirtualApp.shutdown();
 	}
 
+    /**
+     * Reads the FULL_NULL environment variable to decide this.enableNullSupport.
+     *
+     * This deliberately avoids createObject( "java", ... ) when the engine
+     * exposes the environment through server.system (Lucee and BoxLang do). On
+     * BoxLang, resolving a Java class in the Application.cfc pseudo-constructor
+     * while the application is still being defined initializes the request's
+     * class resolver WITHOUT the this.javaSettings jars, so every
+     * createObject( "java", ... ) for a javaSettings class fails for the whole
+     * first request after server start (the Playwright specs then fail on a
+     * cold server). Adobe has no server.system, so it keeps the Java fallback;
+     * the bug does not occur there.
+     */
     private boolean function shouldEnableFullNullSupport() {
-        var system = createObject( "java", "java.lang.System" );
-        var value = system.getEnv( "FULL_NULL" );
+        if ( server.keyExists( "system" ) && server.system.keyExists( "environment" ) ) {
+            var envValue = server.system.environment.FULL_NULL ?: "";
+            return len( envValue ) ? !!envValue : false;
+        }
+        var value = createObject( "java", "java.lang.System" ).getEnv( "FULL_NULL" );
         return isNull( value ) ? false : !!value;
     }
 }

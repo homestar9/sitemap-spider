@@ -15,8 +15,8 @@
  * an engine that cannot run Playwright - every spec here skips, so the rest of
  * the suite stays green.
  *
- * Local run recipe (validated on Adobe 2023; see the task 09 note about a
- * pre-existing Lucee 6 Crawler failure that blocks the whole suite there):
+ * Local run recipe (task 15 validated this on Adobe 2023, Lucee 5, Lucee 6,
+ * and BoxLang):
  *   1. box install cbPlaywright  (in test-harness; also installs the driver)
  *   2. box server start serverConfigFile=server-adobe@2023.json
  *   3. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.PlaywrightSpec"
@@ -28,18 +28,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
     // Decide skip vs run at construction, before run() registers the specs. The
     // it() skip argument is evaluated during registration, which happens before
-    // beforeAll, so this cannot be set in beforeAll. The check only needs the JVM,
-    // the file system, and the server scope, so it is safe here.
-    //
-    // Playwright is skipped when its driver is missing OR the engine is BoxLang.
-    // The Playwright backend pulls in the cbPlaywright helpers with a CFML include
-    // (models/browsers/Playwright.cfc), and BoxLang does not expose functions
-    // defined in an included template as callable methods, so the backend's first
-    // call (beforeAll) fails with "Method 'beforeAll' not found". Until cbPlaywright
-    // supports BoxLang, treat BoxLang as an engine that cannot run Playwright and
-    // skip these specs there, the same way a missing driver skips them. See the
-    // task 15 follow-up note in plans/00-overview.md.
-    variables.playwrightAvailable = driverIsInstalled() && !isBoxLang();
+    // beforeAll, so this cannot be set in beforeAll. The check only needs the JVM
+    // and the file system, so it is safe here.
+    variables.playwrightAvailable = driverIsInstalled();
 
     function beforeAll(){
         super.beforeAll();
@@ -140,17 +131,6 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
             driverDir = javaSystem.getProperty( "user.home" ) & fs & ".CommandBox" & fs & "cfml" & fs & "modules" & fs & "commandbox-cbplaywright" & fs & "driver";
         }
         return directoryExists( driverDir );
-    }
-
-    /**
-     * Returns true when the CFML engine is BoxLang. BoxLang populates a "boxlang"
-     * key in the server scope (its ColdFusion-compat shim otherwise reports the
-     * product name as "Lucee", so that name cannot be used to tell them apart).
-     * Used to skip the Playwright specs, since the cbPlaywright include-based
-     * mixin does not load on BoxLang.
-     */
-    private boolean function isBoxLang(){
-        return server.keyExists( "boxlang" );
     }
 
 }
