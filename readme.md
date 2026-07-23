@@ -194,6 +194,15 @@ sees links and content that JavaScript adds after load. It needs some setup:
    large crawl with a high `waitMs` is slow; prefer `waitForSelector` where you
    can.
 
+> **Single-threaded, and clean shutdown matters.** The Playwright backend always
+> runs on one thread. A `runAsync = true` crawl with this backend downgrades to
+> single-threaded (and logs it), because Playwright pins each browser to the one
+> thread that created it, so parallel fetching is not possible on a shared
+> instance. Also stop the server cleanly (`box server stop`, or let a crawl
+> finish normally) — the backend closes the browser and its driver when a crawl
+> ends, but a hard kill of the JVM can leave orphaned Chromium `headless_shell`
+> processes behind.
+
 ## Output and splitting
 
 - **`<lastmod>`** is written date-only (`YYYY-MM-DD`), which is valid per

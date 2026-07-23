@@ -21,6 +21,16 @@
  * created lazily on the first fetch and reused for the whole crawl (each fetch
  * navigates the same page). The Crawler calls shutdown() when the crawl finishes
  * to close the browser and stop the driver process.
+ *
+ * Process cleanup: a normal crawl reaps the browser and its driver process in
+ * crawl()'s finally via shutdown(). A hard JVM kill (kill -9, and most Windows
+ * `box server stop`) can still leave orphaned Chromium `headless_shell`
+ * processes behind. No JVM shutdown hook is added to catch that: a shutdown hook
+ * does not run on those hard-kill paths, which is where the orphans actually
+ * come from, so it would add cross-engine complexity for almost no coverage.
+ * Playwright's own driver watches its stdin pipe and normally stops Chromium
+ * when the JVM connection drops. An external process reaper is out of scope.
+ * (Task 25 decision — see supportsParallel() for the parallel side.)
  */
 component
     extends="BaseBrowser"
@@ -174,10 +184,24 @@ component
     }
 
     /**
-     * Reports that this backend is not safe for parallel crawling. It reuses one
-     * shared browser page and context for the whole crawl (see getPage), and a
-     * Playwright page/context cannot be driven from several threads at once. The
-     * Crawler downgrades a runAsync crawl to single-threaded when this is false.
+     * Reports that this backend is not safe for parallel crawling, so the Crawler
+     * downgrades a runAsync crawl to single-threaded when the backend is this one.
+     *
+     * The reason is a hard Playwright Java rule, not just the shared page/context
+     * in getPage: a Playwright instance and everything it creates (Browser,
+     * BrowserContext, Page) is pinned to the one thread that created it and cannot
+     * be driven from any other thread. So a per-worker context/page pool on one
+     * shared instance is impossible. The only design that would actually run in
+     * parallel is thread-local: each worker thread builds its OWN full stack —
+     * Playwright instance, Node driver process, Browser, and Chromium
+     * headless_shell. At the default asyncMaxThreads = 10 that is up to 10 headless
+     * Chrome plus 10 driver processes, each ~1-2 s to start.
+     *
+     * That was deliberately left out (task 25, closed won't-do): the Playwright
+     * backend is used for JS-heavy sites, and those crawls are usually small (a
+     * handful of pages), so the process cost far outweighs the wall-clock gain.
+     * Revisit only for a genuinely large JS-rendered crawl, and cap the worker
+     * count well below asyncMaxThreads if so.
      */
     boolean function supportsParallel() {
         return false;
