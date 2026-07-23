@@ -169,6 +169,39 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				expect( result.pages ).notToHaveKey( oldUrl );
 			} );
 
+			it( "reports the HTTP redirect chain in result.redirects", function(){
+				var oldUrl = variables.appRoot & "location-old.cfm";
+				var newUrl = variables.appRoot & "location-new.cfm";
+
+				var result = getInstance( "sitemapService@sitemap-spider" ).create( oldUrl );
+
+				var byFrom = {};
+				for ( var entry in result.redirects ) {
+					byFrom[ entry.from ] = entry;
+				}
+				expect( byFrom ).toHaveKey( oldUrl );
+				expect( byFrom[ oldUrl ].to ).toBe( newUrl );
+				// The chain starts at the requested URL and ends at the final URL.
+				expect( byFrom[ oldUrl ].chain[ 1 ].url ).toBe( oldUrl );
+				expect( byFrom[ oldUrl ].chain[ byFrom[ oldUrl ].chain.len() ].url ).toBe( newUrl );
+			} );
+
+			it( "stops a redirect loop at maxRedirects and records it as bad", function(){
+				var loopUrl = variables.appRoot & "redirect-loop.cfm";
+				var settings = getInstance( "coldbox:moduleSettings:sitemap-spider" );
+				var savedMax = settings.maxRedirects;
+				// Keep the hop-limit low so the test is fast; the fixture redirects to
+				// itself, so without a limit the fetch would never return.
+				settings.maxRedirects = 3;
+				try {
+					var result = getInstance( "sitemapService@sitemap-spider" ).create( loopUrl );
+					expect( result.badUrls ).toHaveKey( loopUrl );
+					expect( result.pages ).notToHaveKey( loopUrl );
+				} finally {
+					settings.maxRedirects = savedMax;
+				}
+			} );
+
 			it( "does not carry pages over from a previous crawl", function(){
 				// Regression for the Crawler state-reset fix: WireBox may hand back a
 				// cached Crawler, so crawl() resets its state at the top. A first crawl

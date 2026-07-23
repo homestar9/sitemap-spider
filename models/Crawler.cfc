@@ -44,6 +44,10 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.excludedUrls = {}; // set of URLs explicitly excluded by the user
         variables.badUrls = {}; // urls that couldn't be fetched
         variables.disallowedUrls = {}; // set of URLs skipped because robots.txt disallows them
+        // Map of requested URL -> its redirect hop chain (array of { url, status }),
+        // recorded only for fetches that followed at least one HTTP redirect. A
+        // CFML struct in sync; initAsyncState swaps it for a ConcurrentHashMap.
+        variables.redirects = {};
         // Map of URL -> reason for links dropped during the crawl (nofollow /
         // excluded / disallowed), surfaced in the result as the "ignored" array.
         // A CFML struct in sync; initAsyncState swaps it for a ConcurrentHashMap.
@@ -363,6 +367,12 @@ component accessors=true hint="Handles crawling of website URLs" {
             return;
         }
 
+        // Record the HTTP redirect chain when the browser reported one, keyed by
+        // the URL we requested, so the result can show how each URL redirected.
+        if ( fetchResult.keyExists( "redirectChain" ) ) {
+            appendRedirect( normalizedUrl, fetchResult.redirectChain );
+        }
+
         // assert: we have a successful fetch
         var canonicalUrl = "";
         var links = [];
@@ -662,6 +672,23 @@ component accessors=true hint="Handles crawling of website URLs" {
     }
 
     /**
+     * Records the redirect hop chain for a fetched URL, keyed by the requested URL.
+     * @url The URL the crawler requested (already normalized).
+     * @chain The array of { url, status } hops the browser reported.
+     *
+     * Only called when a fetch actually followed a redirect. The key is the
+     * requested URL, which is claimed once per crawl, so there is one entry per
+     * source URL that redirected.
+     */
+    private void function appendRedirect( required string url, required array chain ) {
+        if ( variables.async ) {
+            variables.redirects.put( arguments.url, arguments.chain );
+            return;
+        }
+        variables.redirects[ arguments.url ] = arguments.chain;
+    }
+
+    /**
      * Records a URL skipped because robots.txt disallows it, by adding it to the
      * disallowedUrls set (so repeats from multiple pages are recorded once).
      * @url The disallowed URL
@@ -740,6 +767,7 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.badUrls       = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.disallowedUrls = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.ignoredUrls   = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
+        variables.redirects     = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.pending       = createObject( "java", "java.util.concurrent.atomic.AtomicInteger" ).init( javaCast( "int", 0 ) );
         variables.pageCount     = createObject( "java", "java.util.concurrent.atomic.AtomicInteger" ).init( javaCast( "int", 0 ) );
         // Shared next-allowed-fetch timestamp (getTickCount millis) that spaces
@@ -857,7 +885,8 @@ component accessors=true hint="Handles crawling of website URLs" {
 
     /**
      * Builds the crawl result struct in the shape callers expect: pages and
-     * badUrls as CFML structs, processedUrls and disallowedUrls as arrays, plus a
+     * badUrls as CFML structs, processedUrls and disallowedUrls as arrays, an
+     * ignored report, a redirects report (array of { from, to, chain }), plus a
      * runAsync flag. In async mode the internal state is java.util.concurrent
      * maps, so it is copied into CFML structs/arrays here; in sync mode the state
      * is already CFML structs.
@@ -870,6 +899,7 @@ component accessors=true hint="Handles crawling of website URLs" {
                 "processedUrls": javaMapKeys( variables.processedUrls ),
                 "disallowedUrls": javaMapKeys( variables.disallowedUrls ),
                 "ignored": buildIgnoredPairs(),
+                "redirects": buildRedirectPairs(),
                 "runAsync": true
             };
         }
@@ -882,8 +912,45 @@ component accessors=true hint="Handles crawling of website URLs" {
             "processedUrls": javaMapKeys( variables.processedUrls ),
             "disallowedUrls": structKeyArray( variables.disallowedUrls ),
             "ignored": buildIgnoredPairs(),
+            "redirects": buildRedirectPairs(),
             "runAsync": false
         };
+    }
+
+    /**
+     * Builds the redirect report as an array of { from, to, chain } structs from
+     * the redirects map (requested URL -> hop chain). `from` is the requested URL,
+     * `to` is the final URL (the chain's last hop), and `chain` is the full array
+     * of { url, status } hops. redirects is a CFML struct in sync mode and a
+     * ConcurrentHashMap in async mode, so each branch reads it in its own shape.
+     * The order is not guaranteed and callers should not rely on it.
+     */
+    private array function buildRedirectPairs() {
+        var out = [];
+        if ( variables.async ) {
+            var iterator = variables.redirects.entrySet().iterator();
+            while ( iterator.hasNext() ) {
+                var entry = iterator.next();
+                out.append( redirectPair( entry.getKey(), entry.getValue() ) );
+            }
+            return out;
+        }
+        for ( var requestedUrl in variables.redirects ) {
+            out.append( redirectPair( requestedUrl, variables.redirects[ requestedUrl ] ) );
+        }
+        return out;
+    }
+
+    /**
+     * Builds one { from, to, chain } redirect report entry from a requested URL and
+     * its hop chain. `to` is the last hop's URL, or the requested URL if the chain
+     * is somehow empty.
+     * @requestedUrl The URL the crawler asked for.
+     * @chain The array of { url, status } hops.
+     */
+    private struct function redirectPair( required string requestedUrl, required array chain ) {
+        var finalUrl = arguments.chain.len() ? arguments.chain[ arguments.chain.len() ].url : arguments.requestedUrl;
+        return { "from": arguments.requestedUrl, "to": finalUrl, "chain": arguments.chain };
     }
 
     /**

@@ -255,6 +255,34 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				expect( result.pages ).toHaveKey( keepUrl );
 			} );
 
+			it( "reports a followed HTTP redirect in the redirects report", function(){
+				var oldUrl = variables.root & "location-old.cfm";
+				var newUrl = variables.root & "location-new.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( oldUrl ) );
+				// The fetch of oldUrl reports a 2-hop chain ending at newUrl, the way
+				// the real browsers set redirectChain after following a 30x.
+				ctx.fake.addPage(
+					url           = oldUrl,
+					html          = "",
+					finalUrl      = newUrl,
+					redirectChain = [ { "url" : oldUrl, "status" : 301 }, { "url" : newUrl, "status" : 200 } ]
+				);
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				var byFrom = {};
+				for ( var entry in result.redirects ) {
+					byFrom[ entry.from ] = entry;
+				}
+				expect( byFrom ).toHaveKey( oldUrl );
+				expect( byFrom[ oldUrl ].to ).toBe( newUrl );
+				expect( byFrom[ oldUrl ].chain.len() ).toBe( 2 );
+				// A page that did not redirect is not in the report.
+				expect( byFrom ).notToHaveKey( variables.root );
+			} );
+
 		} );
 
 		describe( "crawl() ignored reporting and pattern excludes", function(){

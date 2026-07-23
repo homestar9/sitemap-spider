@@ -79,6 +79,14 @@ component {
             lastModFallback : "omit",
             requestTimeout : 10000, // ms
             maxBodySize : 5242880, // 5 MB cap on the response body jsoup downloads
+            // Most HTTP 30x redirect hops the Jsoup backend follows for one URL
+            // before giving up. It follows redirects itself (instead of letting
+            // jsoup follow them silently) so it can enforce this limit and report
+            // the hop chain. A URL whose chain exceeds this is recorded as bad.
+            // Default 20 matches jsoup's own internal cap, so normal sites are
+            // unaffected. The Playwright backend uses the browser's own limit; this
+            // setting does not apply to it.
+            maxRedirects : 20,
             // Playwright backend only: how long to wait for JS after navigation.
             // waitStrategy is a page load state ("load" or "networkidle");
             // waitMs is an extra fixed wait (ms) applied after, needed for content

@@ -13,9 +13,15 @@ interface {
      * - html: the response body, present ONLY when the content type is HTML or
      *   XHTML (see BaseBrowser.isHtmlContentType). Omitted for other types, so
      *   callers must check keyExists( "html" ) before reading it.
+     * - redirectChain: OPTIONAL. An array of { url, status } structs, one per hop,
+     *   present only when the fetch followed one or more redirects. The first entry
+     *   is the requested URL; the last is the final URL. A backend that does not
+     *   track hops omits this key, so callers must check keyExists( "redirectChain" ).
      *
      * Throws a "StatusCodeException" when the response status is not 200, so the
-     * Crawler can record the URL as bad and move on.
+     * Crawler can record the URL as bad and move on. A backend that enforces a
+     * redirect hop-limit throws a "TooManyRedirectsException" when a chain is too
+     * long, which the Crawler also records as a bad URL.
      *
      * @returns struct
      */

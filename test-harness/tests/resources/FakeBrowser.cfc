@@ -43,14 +43,28 @@ component {
      * @finalUrl The URL returned in the result's "url" key. Defaults to @url. Set
      *           it to a different URL to simulate a followed HTTP 30x, the way the
      *           real Jsoup browser returns response.url() (the post-redirect URL).
+     * @redirectChain Optional array of { url, status } hops. When passed, it is
+     *           returned under the result's "redirectChain" key, the way the real
+     *           browsers report a followed redirect, so a spec can assert the
+     *           Crawler's redirects report without real HTTP.
      */
-    function addPage( required string url, required string html, struct headers = {}, string finalUrl = arguments.url ) {
-        variables.pages[ arguments.url ] = {
+    function addPage(
+        required string url,
+        required string html,
+        struct headers = {},
+        string finalUrl = arguments.url,
+        array redirectChain
+    ) {
+        var page = {
             "url"         : arguments.finalUrl,
             "headers"     : arguments.headers,
             "contentType" : "text/html;charset=UTF-8",
             "html"        : arguments.html
         };
+        if ( !isNull( arguments.redirectChain ) ) {
+            page[ "redirectChain" ] = arguments.redirectChain;
+        }
+        variables.pages[ arguments.url ] = page;
         return this;
     }
 

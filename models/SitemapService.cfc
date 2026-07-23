@@ -150,6 +150,7 @@ component
             "badUrls": result.badUrls,
             "disallowedUrls": result.disallowedUrls,
             "ignored": result.ignored,
+            "redirects": result.redirects,
             "runAsync": result.runAsync,
             // Report the path that was actually written (with ".gz" when gzip is
             // on); empty when nothing was saved.

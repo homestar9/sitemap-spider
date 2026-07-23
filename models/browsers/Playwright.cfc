@@ -40,6 +40,11 @@ component
      * final URL (which reflects any client-side redirect). Throws a
      * StatusCodeException on a non-200 navigation response, matching the Jsoup
      * backend so the Crawler records the URL as bad.
+     *
+     * When the navigation followed one or more HTTP redirects, the result carries
+     * a "redirectChain" array of { url, status } built from Playwright's own
+     * redirect history (observability only). Unlike the Jsoup backend, the browser
+     * follows redirects itself, so the maxRedirects hop-limit does not apply here.
      */
     any function fetchUrl( required string url ) {
 
@@ -70,12 +75,50 @@ component
         // page.content() is the rendered DOM after the wait. The content type is
         // always HTML here because a browser navigation only yields a document, so
         // buildResult includes the body under "html".
-        return buildResult(
+        var result = buildResult(
             url = page.url().toString(),
             headers = headers,
             contentType = "text/html",
             body = page.content()
         );
+
+        var chain = buildRedirectChain( response );
+        if ( chain.len() > 1 ) {
+            result[ "redirectChain" ] = chain;
+        }
+        return result;
+    }
+
+    /**
+     * Builds the { url, status } hop chain for a navigation from Playwright's
+     * redirect history. Walks request.redirectedFrom() back to the first request,
+     * then emits the hops in first-to-last order. Returns an empty array when the
+     * response is null (an in-page navigation with no main response).
+     * @response The main navigation Response, or null.
+     */
+    private array function buildRedirectChain( any response ) {
+        if ( isNull( arguments.response ) ) {
+            return [];
+        }
+        // Collect requests newest-first: redirectedFrom() links a request to the
+        // one that redirected to it.
+        var reqs = [];
+        var req  = arguments.response.request();
+        while ( !isNull( req ) ) {
+            reqs.append( req );
+            req = req.redirectedFrom();
+        }
+
+        // Emit oldest-first so the chain reads requested URL -> final URL. Each
+        // request's own response gives that hop's status (the 3xx for a redirect,
+        // the final 200 for the last).
+        var chain = [];
+        for ( var i = reqs.len(); i >= 1; i-- ) {
+            var hopResponse = reqs[ i ].response();
+            var status      = isNull( hopResponse ) ? 0 : hopResponse.status();
+            chain.append( { "url" : reqs[ i ].url(), "status" : status } );
+        }
+        return chain;
     }
 
     /**
