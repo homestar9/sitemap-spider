@@ -105,6 +105,17 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return false;
 	}
 
+	// Returns the page struct whose url matches exactly, or an empty struct so a
+	// missing page fails the spec's assertions instead of throwing.
+	private struct function findPage( required array pages, required string url ){
+		for ( var page in arguments.pages ){
+			if ( compare( page.url, arguments.url ) == 0 ){
+				return page;
+			}
+		}
+		return {};
+	}
+
 	function run(){
 		describe( "Crawler correctness fixes", function(){
 
@@ -639,6 +650,78 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], excludePattern = "" );
 
 				expect( hasPage( result.pages, adminUrl ) ).toBeFalse();
+			} );
+
+		} );
+
+		// Task 24: hreflang alternates and video metadata are collected per page,
+		// each behind its own module setting, and land on the page struct.
+		describe( "crawl() sitemap extension collection", function(){
+
+			it( "records page alternates when includeHreflang is on", function(){
+				var ctx = buildCrawler( { includeHreflang : true } );
+				ctx.fake.addPage(
+					variables.root,
+					'<link rel="alternate" hreflang="es" href="https://es.example.test/">'
+					& '<link rel="alternate" hreflang="x-default" href="http://example.test/">'
+				);
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+				var page   = findPage( result.pages, variables.root );
+
+				expect( page.alternates.len() ).toBe( 2 );
+				expect( page.alternates[ 1 ].hreflang ).toBe( "es" );
+				expect( page.alternates[ 1 ].href ).toBe( "https://es.example.test/" );
+				expect( page.alternates[ 2 ].hreflang ).toBe( "x-default" );
+			} );
+
+			it( "leaves alternates as an empty array when includeHreflang is off", function(){
+				var ctx = buildCrawler();
+				ctx.fake.addPage(
+					variables.root,
+					'<link rel="alternate" hreflang="es" href="https://es.example.test/">'
+				);
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+				var page   = findPage( result.pages, variables.root );
+
+				expect( page.keyExists( "alternates" ) ).toBeTrue();
+				expect( page.alternates.len() ).toBe( 0 );
+			} );
+
+			it( "records page videos when includeVideos is on", function(){
+				var ctx = buildCrawler( { includeVideos : true } );
+				ctx.fake.addPage(
+					variables.root,
+					'<html><head><title>Video Page</title>'
+					& '<meta name="description" content="A page with a video.">'
+					& '</head><body>'
+					& '<video src="http://example.test/clip.mp4" poster="http://example.test/poster.jpg"></video>'
+					& '</body></html>'
+				);
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+				var page   = findPage( result.pages, variables.root );
+
+				expect( page.videos.len() ).toBe( 1 );
+				expect( page.videos[ 1 ].contentLoc ).toBe( "http://example.test/clip.mp4" );
+				expect( page.videos[ 1 ].thumbnailLoc ).toBe( "http://example.test/poster.jpg" );
+				expect( page.videos[ 1 ].title ).toBe( "Video Page" );
+				expect( page.videos[ 1 ].description ).toBe( "A page with a video." );
+			} );
+
+			it( "leaves videos as an empty array when includeVideos is off", function(){
+				var ctx = buildCrawler();
+				ctx.fake.addPage(
+					variables.root,
+					'<video src="http://example.test/clip.mp4" poster="http://example.test/poster.jpg"></video>'
+				);
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+				var page   = findPage( result.pages, variables.root );
+
+				expect( page.keyExists( "videos" ) ).toBeTrue();
+				expect( page.videos.len() ).toBe( 0 );
 			} );
 
 		} );

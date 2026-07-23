@@ -107,7 +107,9 @@ component
             maxBytes       = settings.maxSitemapBytes,
             gzip           = gzip,
             lastModFormat  = settings.lastModFormat,
-            includeImages  = settings.includeImages
+            includeImages  = settings.includeImages,
+            includeHreflang = settings.includeHreflang,
+            includeVideos  = settings.includeVideos
         );
 
         // The path the primary file is actually written to. With gzip on, ".gz"

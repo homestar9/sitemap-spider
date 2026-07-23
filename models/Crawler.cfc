@@ -412,6 +412,8 @@ component accessors=true hint="Handles crawling of website URLs" {
         var links = [];
         var lastModified = "";
         var images = []; // filled from the parsed page only when includeImages is on
+        var alternates = []; // filled only when includeHreflang is on
+        var videos = []; // filled only when includeVideos is on
         var priority = getPriority( depth );
 
         // jsoup follows HTTP 30x, so fetchResult.url is the final URL and may
@@ -446,6 +448,16 @@ component accessors=true hint="Handles crawling of website URLs" {
             // image-free and the output is unchanged).
             if ( settings.includeImages ) {
                 images = parser.getImages( parsedPage );
+            }
+
+            // collect hreflang alternates and video metadata the same way, each
+            // behind its own setting so the page struct and output stay
+            // unchanged when off.
+            if ( settings.includeHreflang ) {
+                alternates = parser.getAlternateLinks( parsedPage );
+            }
+            if ( settings.includeVideos ) {
+                videos = parser.getVideos( parsedPage );
             }
 
             logger.info( "Parsed HTML content. Canonical URL: #canonicalUrl#, Links found: #links.len()#" );
@@ -497,7 +509,9 @@ component accessors=true hint="Handles crawling of website URLs" {
                 : ( settings.lastModFallback == "crawlTime" ? now() : "" ),
             priority = priority,
             depth = depth,
-            images = images
+            images = images,
+            alternates = alternates,
+            videos = videos
         );
 
         // loop through the links and enqueue. enqueueDecision returns "" to enqueue
@@ -561,6 +575,11 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @depth The crawl depth the page was found at
      * @images Array of absolute image URLs for the page (empty unless the
      *   includeImages setting is on)
+     * @alternates Array of { hreflang, href } structs for the page's declared
+     *   alternate-language links (empty unless the includeHreflang setting is on)
+     * @videos Array of video structs (title, description, thumbnailLoc,
+     *   contentLoc, playerLoc) for the page (empty unless the includeVideos
+     *   setting is on)
      *
      * Sync mode: stores the page directly. The maxPages cutoff is already applied
      * by atMaxPages() at the top of crawlUrl, so the count stays exact.
@@ -578,7 +597,9 @@ component accessors=true hint="Handles crawling of website URLs" {
         required any lastModified, // a date object, or "" when unknown
         required numeric priority,
         required numeric depth,
-        array images = []
+        array images = [],
+        array alternates = [],
+        array videos = []
     ) {
         // The url is a field on the page struct, not a map key: pages is an array,
         // so two URLs that differ only in path case (/Page vs /page) both survive
@@ -588,7 +609,9 @@ component accessors=true hint="Handles crawling of website URLs" {
             "lastModified": arguments.lastModified,
             "priority": arguments.priority,
             "depth": arguments.depth,
-            "images": arguments.images
+            "images": arguments.images,
+            "alternates": arguments.alternates,
+            "videos": arguments.videos
         };
 
         if ( variables.async ) {
