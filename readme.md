@@ -212,6 +212,23 @@ sees links and content that JavaScript adds after load. It needs some setup:
   `xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"` namespace on
   the `<urlset>`.
 
+## Releasing (maintainers)
+
+Releases are manual (there is no CI). To cut and publish a new version:
+
+1. Bump `version` in `box.json` (semver: patch for fixes, minor for additive
+   features, major for breaking changes).
+2. Roll the changelog: rename the `[Unreleased]` section in `changelog.md` to the
+   new version with today's date, and start a fresh empty `[Unreleased]` above it.
+3. Run `box run-script release`. This builds the module (stamping the box.json
+   version into `ModuleConfig.cfc`'s `this.version`) and publishes the stamped
+   package to ForgeBox. It runs `release.boxr` under the hood.
+4. Commit the version and changelog bumps, then tag: `git tag v<version>`.
+
+`box run-script build:module` on its own produces the release artifact under
+`.artifacts/sitemap-spider/<version>/` (a version-stamped zip plus `.sha512` and
+`.md5` checksums) without publishing — handy for inspecting a build first.
+
 ## License
 
 PolyForm Perimeter 1.0.1. See [LICENSE.md](LICENSE.md).

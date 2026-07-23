@@ -26,7 +26,6 @@
     },
     "devDependencies":{
         "commandbox-cfformat":"*",
-        "commandbox-docbox":"*",
         "commandbox-dotenv":"*",
         "commandbox-cfconfig":"*"
     },
@@ -36,15 +35,15 @@
         "/server*.json",
         "build",
         "plans",
+        "release.boxr",
+        "sitemap-spider.code-workspace",
         "AGENTS.md",
         "CLAUDE.md"
     ],
     "scripts":{
         "build:module":"task run taskFile=build/Build.cfc :projectName=`package show slug` :version=`package show version`",
-        "build:docs":"task run taskFile=build/Build.cfc target=docs :projectName=`package show slug` :version=`package show version`",
         "install:dependencies":"install && cd test-harness && install",
-        "create:admin":"task run taskFile=install/CreateAdmin.cfc",
-        "release":"run-script build:module",
+        "release":"recipe release.boxr",
         "format":"cfformat run helpers,models,test-harness/tests/,ModuleConfig.cfc --overwrite",
         "format:watch":"cfformat watch helpers,models,test-harness/tests/,ModuleConfig.cfc ./.cfformat.json",
         "format:check":"cfformat check helpers,models,test-harness/tests/,ModuleConfig.cfc ./.cfformat.json",

@@ -182,20 +182,10 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				expect( second.pages ).notToHaveKey( variables.appRoot & "redirect-new.cfm" );
 			} );
 
-			// js-redirect-old.cfm redirects with JavaScript (location.replace), which
-			// jsoup cannot see. This spec stays skipped under the default jsoup
-			// backend; the real assertion for the JavaScript redirect (target:
-			// contact.cfm, where the fixture's location.replace points) lives in
-			// PlaywrightSpec, which runs the Playwright backend.
-			xit( "follows a JavaScript redirect (requires Playwright, see PlaywrightSpec)", function(){
-				var oldUrl = variables.appRoot & "js-redirect-old.cfm";
-				var newUrl = variables.appRoot & "contact.cfm";
-
-				var result = getInstance( "sitemapService@sitemap-spider" ).create( oldUrl );
-
-				expect( result.pages ).toHaveKey( newUrl );
-				expect( result.pages ).notToHaveKey( oldUrl );
-			} );
+			// The JavaScript-redirect case (js-redirect-old.cfm does a
+			// location.replace to contact.cfm) is not testable under the default jsoup
+			// backend, which cannot run JavaScript. Its live assertion runs in
+			// PlaywrightSpec, which uses the Playwright backend.
 
 		} );
 
