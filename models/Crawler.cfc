@@ -335,6 +335,17 @@ component accessors=true hint="Handles crawling of website URLs" {
             return;
         }
 
+        // Re-check the page cap after claiming, right before the fetch. The check
+        // at the top of this method can be stale in async mode (several workers
+        // pass it at once when pageCount is near maxPages), so this second read
+        // catches most of the workers that filled the cap while this one waited to
+        // be scheduled, avoiding a wasted fetch + parse. It narrows the overshoot
+        // but does not close it (the read is still not atomic with the fetch); the
+        // exact cap stays on the reservation in appendPage.
+        if ( atMaxPages() ) {
+            return;
+        }
+
         logger.info( "Crawling #normalizedUrl# at depth #arguments.depth#" );
 
         // Honor the robots.txt Crawl-delay right before the fetch. In sync mode
@@ -510,10 +521,12 @@ component accessors=true hint="Handles crawling of website URLs" {
      * by atMaxPages() at the top of crawlUrl, so the count stays exact.
      *
      * Async mode: reserves a slot with an atomic increment first. Several workers
-     * can pass the approximate atMaxPages() check at once, so the reservation is
+     * can pass the approximate atMaxPages() checks at once, so the reservation is
      * what actually caps the total: if the increment goes over maxPages the page
      * is not recorded (and the reservation is released). This keeps the recorded
-     * count at most maxPages.
+     * count at most maxPages exactly. The two atMaxPages() checks in crawlUrl (one
+     * at entry, one right before the fetch) only reduce wasted fetches near the
+     * boundary; they are not the cap.
      */
     private void function appendPage(
         required string url,

@@ -373,6 +373,40 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				expect( structCount( result.pages ) ).toBe( 4 );
 			} );
 
+			it( "never records more than maxPages under parallel crawling", function(){
+				// A wide fan-out means several workers pass the approximate
+				// atMaxPages() check at once; the atomic reservation in appendPage
+				// must still cap the recorded count at exactly maxPages.
+				var ctx = buildCrawler( { maxPages : 3 } );
+				var linked = [];
+				for ( var i = 1; i <= 20; i++ ){
+					linked.append( variables.root & "p#i#.cfm" );
+				}
+				wireGraph( ctx.fake, linked );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
+
+				expect( result.runAsync ).toBeTrue();
+				expect( structCount( result.pages ) ).toBeLTE( 3 );
+			} );
+
+			it( "downgrades to single-threaded when the backend is not parallel-safe", function(){
+				// A backend that reports supportsParallel()=false (like Playwright)
+				// forces sync even when runAsync=true, and every page is still found.
+				var ctx = buildCrawler();
+				ctx.fake.setParallelSupported( false );
+				var linked = [];
+				for ( var i = 1; i <= 4; i++ ){
+					linked.append( variables.root & "p#i#.cfm" );
+				}
+				wireGraph( ctx.fake, linked );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
+
+				expect( result.runAsync ).toBeFalse();
+				expect( structCount( result.pages ) ).toBe( 5 );
+			} );
+
 		} );
 
 		// Task 16: the normalization policy (Parser.normalizeUrl, folded into

@@ -25,6 +25,7 @@ component {
         variables.throwUrls    = {}; // url -> error message
         variables.requestedUrls = []; // every fetchUrl() call, in order
         variables.robotsContent = ""; // body returned by getText() (robots.txt)
+        variables.parallelSupported = true; // what supportsParallel() reports
         // Lock name guarding requestedUrls, so the recording is safe when the
         // parallel crawler calls fetchUrl() from several worker threads at once.
         variables.recordLock   = "FakeBrowser-" & createUUID();
@@ -108,13 +109,28 @@ component {
     }
 
     /**
+     * setParallelSupported
+     * Overrides what supportsParallel() reports, so a spec can exercise the
+     * Crawler's downgrade path (runAsync requested but the backend is not
+     * parallel-safe). Defaults to true, matching a normal fake.
+     *
+     * @supported Whether supportsParallel() should return true.
+     */
+    function setParallelSupported( required boolean supported ) {
+        variables.parallelSupported = arguments.supported;
+        return this;
+    }
+
+    /**
      * supportsParallel
-     * Reports that this fake is safe for the parallel crawler (its only mutable
-     * state, requestedUrls, is lock-guarded). Mirrors the real backends' method so
-     * the Crawler can call it when deciding whether to run in parallel.
+     * Reports whether this fake is safe for the parallel crawler. Defaults to true
+     * (its only mutable state, requestedUrls, is lock-guarded); a spec can flip it
+     * with setParallelSupported() to test the Crawler's single-threaded downgrade.
+     * Mirrors the real backends' method so the Crawler can call it when deciding
+     * whether to run in parallel.
      */
     boolean function supportsParallel() {
-        return true;
+        return variables.parallelSupported;
     }
 
     /**
