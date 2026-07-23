@@ -42,6 +42,14 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
         if ( variables.playwrightAvailable ) {
             variables.rootPages     = runCrawl( variables.appRoot ).pages;
             variables.redirectPages = runCrawl( variables.appRoot & "js-redirect-old.cfm" ).pages;
+            // Same late link as rootPages, but found via a targeted waitForSelector
+            // with waitMs = 0 instead of a 3.5s blanket sleep. Proves the selector
+            // wait replaces the blanket wait.
+            variables.selectorPages = runCrawl(
+                seedUrl         = variables.appRoot,
+                waitMs          = 0,
+                waitForSelector = "a[href='js-link-late.cfm']"
+            ).pages;
         }
     }
 
@@ -66,6 +74,16 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
                 body  = function(){
                     // Only reachable because runCrawl sets waitMs above 3000.
                     expect( variables.rootPages ).toHaveKey( variables.appRoot & "js-link-late.cfm" );
+                }
+            );
+
+            it(
+                title = "finds the late link via waitForSelector with waitMs = 0",
+                skip  = !variables.playwrightAvailable,
+                body  = function(){
+                    // The blanket waitMs is 0 here; the crawl only reaches the late
+                    // link because waitForSelector waited for it to be injected.
+                    expect( variables.selectorPages ).toHaveKey( variables.appRoot & "js-link-late.cfm" );
                 }
             );
 
@@ -97,23 +115,36 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
      * singleton, so mutating it changes what the Crawler and backend read.
      *
      * @seedUrl The URL to start crawling from.
+     * @waitMs The blanket post-navigation wait (ms). Defaults to 3500 so the
+     *         delayed link and JS redirect have time to run.
+     * @waitForSelector A CSS selector to wait for instead of a long blanket wait.
+     *         Empty (the default) disables it. When set, callers can pass
+     *         waitMs = 0 and still catch a late-injected element.
      */
-    private struct function runCrawl( required string seedUrl ){
+    private struct function runCrawl( required string seedUrl, numeric waitMs = 3500, string waitForSelector = "" ){
         var s     = getInstance( "coldbox:moduleSettings:sitemap-spider" );
-        var saved = { browserDsl : s.browserDsl, waitMs : s.waitMs, maxCrawlDelay : s.maxCrawlDelay, maxDepth : s.maxDepth };
+        var saved = {
+            browserDsl      : s.browserDsl,
+            waitMs          : s.waitMs,
+            waitForSelector : s.waitForSelector,
+            maxCrawlDelay   : s.maxCrawlDelay,
+            maxDepth        : s.maxDepth
+        };
 
-        s.browserDsl    = "Playwright@sitemap-spider";
-        s.waitMs        = 3500;
-        s.maxCrawlDelay = 0;
-        s.maxDepth      = 1;
+        s.browserDsl      = "Playwright@sitemap-spider";
+        s.waitMs          = arguments.waitMs;
+        s.waitForSelector = arguments.waitForSelector;
+        s.maxCrawlDelay   = 0;
+        s.maxDepth        = 1;
 
         try {
             return getInstance( "Crawler@sitemap-spider" ).crawl( [ arguments.seedUrl ], [] );
         } finally {
-            s.browserDsl    = saved.browserDsl;
-            s.waitMs        = saved.waitMs;
-            s.maxCrawlDelay = saved.maxCrawlDelay;
-            s.maxDepth      = saved.maxDepth;
+            s.browserDsl      = saved.browserDsl;
+            s.waitMs          = saved.waitMs;
+            s.waitForSelector = saved.waitForSelector;
+            s.maxCrawlDelay   = saved.maxCrawlDelay;
+            s.maxDepth        = saved.maxDepth;
         }
     }
 

@@ -85,6 +85,13 @@ component {
             // injected by a setTimeout with no network activity.
             waitStrategy : "networkidle",
             waitMs : 0,
+            // Playwright backend only: a CSS selector to wait for after navigation,
+            // before reading the page. Use this instead of a large blanket waitMs
+            // when you know which element JavaScript injects, so most fetches are
+            // not slowed. Empty means no selector wait. The wait is bounded by
+            // requestTimeout; a selector that never appears logs a warning and the
+            // fetch continues. waitMs still applies when > 0, so the two combine.
+            waitForSelector : "",
             htmlContentTypePattern : "^(text/html|application/xhtml\+xml)(;.*)?$" // check for links + canonical URLs
         };
 	}

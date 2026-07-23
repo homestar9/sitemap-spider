@@ -214,16 +214,34 @@ component
      * Waits for the page after navigation so JavaScript can finish.
      * @page A com.microsoft.playwright.Page
      *
-     * First waits for the configured load state (settings.waitStrategy, "load" or
-     * "networkidle"), then sleeps settings.waitMs. The fixed wait is needed for
-     * content injected by a setTimeout with no network activity, which a load
-     * state alone does not catch. The mixin's own waitForLoadState() only supports
-     * "load", so this calls the Playwright API directly to allow "networkidle".
+     * Three stages, each skipped when unconfigured:
+     * 1. Waits for the configured load state (settings.waitStrategy, "load" or
+     *    "networkidle"). The mixin's own waitForLoadState() only supports "load",
+     *    so this calls the Playwright API directly to allow "networkidle".
+     * 2. Waits for settings.waitForSelector to appear, when set. This is the
+     *    targeted alternative to a large blanket waitMs: it returns as soon as the
+     *    known element exists instead of always sleeping. The wait is bounded by
+     *    requestTimeout; if the selector never appears the timeout error is caught,
+     *    logged, and the fetch continues (the page may simply not have it).
+     * 3. Sleeps settings.waitMs, when > 0. Still supported and combinable with the
+     *    selector wait; needed for content injected by a setTimeout with no network
+     *    activity when you cannot name a selector.
      */
     private void function applyWaitStrategy( required any page ) {
         var loadState = createObject( "java", "com.microsoft.playwright.options.LoadState" )[ uCase( settings.waitStrategy ) ];
         var waitOptions = createObject( "java", "com.microsoft.playwright.Page$WaitForLoadStateOptions" ).init();
         arguments.page.waitForLoadState( loadState, waitOptions );
+
+        if ( len( settings.waitForSelector ) ) {
+            try {
+                var selectorOptions = createObject( "java", "com.microsoft.playwright.Page$WaitForSelectorOptions" )
+                    .init()
+                    .setTimeout( javaCast( "double", settings.requestTimeout ) );
+                arguments.page.waitForSelector( settings.waitForSelector, selectorOptions );
+            } catch ( any e ) {
+                logger.warn( "waitForSelector '#settings.waitForSelector#' did not appear within #settings.requestTimeout#ms: #e.message#" );
+            }
+        }
 
         if ( settings.waitMs > 0 ) {
             sleep( settings.waitMs );
