@@ -75,6 +75,19 @@ component {
             // emitted as <image:image> entries, and the <urlset> gains the image
             // namespace. false leaves images out and keeps the output unchanged.
             includeImages : false,
+            // When true, each page's <link rel="alternate" hreflang="..."> tags
+            // are collected and emitted as <xhtml:link> entries, and the
+            // <urlset> gains the xhtml namespace. Alternates are emitted exactly
+            // as declared, including ones on other hosts. false keeps the
+            // output unchanged.
+            includeHreflang : false,
+            // When true, each page's videos (Open Graph og:video tags and
+            // <video> elements) are collected and emitted as <video:video>
+            // blocks, and the <urlset> gains the video namespace. A video is
+            // only emitted when it has the fields Google requires: a thumbnail,
+            // title, description, and a content or player URL. false keeps the
+            // output unchanged.
+            includeVideos : false,
             // What <lastmod> does when a page has no parseable Last-Modified
             // (no HTTP header, no meta tag): "omit" leaves <lastmod> out for that
             // URL (honest); "crawlTime" records the crawl timestamp instead.
