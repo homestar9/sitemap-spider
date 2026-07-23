@@ -38,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports it in `ignored` with reason `"excluded"`. This is separate from the
   per-crawl exact-URL `excludeUrls` argument. Defaults to empty (no pattern
   exclusion).
+- `waitForSelector` module setting (Playwright backend): a CSS selector to wait
+  for after navigation, so you can wait for a known JS-injected element instead
+  of a large blanket `waitMs`. It returns as soon as the element appears (bounded
+  by `requestTimeout`); a selector that never appears logs a warning and the
+  fetch continues. Defaults to empty (disabled); combines with `waitMs`.
+- `maxRedirects` module setting: the most HTTP redirect hops the Jsoup backend
+  follows for one URL before recording it as bad. It now follows redirects itself
+  so it can enforce this limit and report the hop chain. Defaults to `20`
+  (matching jsoup's own cap, so normal sites are unaffected).
+- `redirects` key in the crawl result: one `{ from, to, chain }` entry per fetched
+  URL that followed an HTTP redirect. `from` is the requested URL, `to` is the
+  final URL, and `chain` lists each hop as `{ url, status }`.
 
 ### Changed
 
@@ -47,6 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `respectRobotsTxt` still defaults to `true`. Most users crawl their own site
   and may prefer to ignore `robots.txt`; set `respectRobotsTxt = false` in the
   module settings to do so.
+- A `robots.txt` `Crawl-delay` no longer forces a single-threaded crawl. A
+  parallel crawl (`runAsync = true`) now honors the delay by spacing fetches
+  `Crawl-delay` seconds apart across the workers, so a delayed site can still be
+  crawled in parallel. A crawl still runs single-threaded only when the browser
+  backend is not parallel-safe (e.g. Playwright).
 
 ----
 

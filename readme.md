@@ -84,6 +84,7 @@ var result = getInstance( "SitemapService@sitemap-spider" ).create(
 | `badUrls` | array | URLs that failed to fetch or returned a non-HTML / error response. |
 | `disallowedUrls` | array | URLs skipped because `robots.txt` disallowed them. |
 | `ignored` | array | Links the crawl dropped, each `{ url, reason }`. `reason` is `"nofollow"`, `"excluded"` (matched `excludeUrls` or `excludePattern`), or `"disallowed"` (blocked by `robots.txt`, so these also appear in `disallowedUrls`). |
+| `redirects` | array | One entry per fetched URL that followed an HTTP redirect: `{ from, to, chain }`. `from` is the requested URL, `to` is the final URL, and `chain` is the hop list, each `{ url, status }`. |
 | `filePath` | string | The path passed as `filePath`, or empty when nothing was saved. |
 | `saved` | boolean | `true` when the sitemap was written to `filePath`. |
 
@@ -110,7 +111,7 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `maxPages` | `1000` | Maximum number of pages to record in one crawl. |
 | `respectRobotsTxt` | `true` | When true, fetches `robots.txt` and honors its `Disallow` / `Allow` rules and `Crawl-delay`. |
 | `userAgent` | `"sitemap-spider"` | Sent on every fetch, and matched against `robots.txt` `User-agent` groups. |
-| `maxCrawlDelay` | `10` | Upper cap, in seconds, on the `robots.txt` `Crawl-delay` actually applied between fetches. |
+| `maxCrawlDelay` | `10` | Upper cap, in seconds, on the `robots.txt` `Crawl-delay` actually applied between fetches. A `Crawl-delay` no longer forces a single-threaded crawl: a parallel crawl still honors it by spacing fetches this far apart across the workers. |
 | `notAllowedPattern` | `\.(png\|webp\|svg\|gif\|js\|css\|jpg\|jpeg)$\|javascript:\|mailto:\|tel:` | Links matching this regex are never crawled (asset files and non-HTTP schemes). |
 | `excludePattern` | `""` (empty) | Regex matched case-insensitively against the full URL for whole-section excludes (e.g. `/admin/`). A match skips the URL and reports it in `ignored` with reason `"excluded"`. Separate from the per-crawl exact-URL `excludeUrls` argument. Empty means no pattern exclusion. |
 | `priority` | `1.0` | `<priority>` assigned to the start URL. |
@@ -123,8 +124,10 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `lastModFallback` | `"omit"` | What `<lastmod>` does when a page has no parseable Last-Modified: `"omit"` leaves it out; `"crawlTime"` records the crawl timestamp. |
 | `requestTimeout` | `10000` | Per-request timeout in milliseconds. |
 | `maxBodySize` | `5242880` | Cap (bytes) on the response body a fetch downloads (5 MB). |
+| `maxRedirects` | `20` | Most HTTP redirect hops the Jsoup backend follows for one URL before recording it as bad. It follows redirects itself so it can enforce this and report the hop `chain` (see `redirects` above). The Playwright backend uses the browser's own limit. |
 | `waitStrategy` | `"networkidle"` | Playwright backend only. Page load state to wait for after navigation (`"load"` or `"networkidle"`). |
-| `waitMs` | `0` | Playwright backend only. Extra fixed wait (ms) after navigation, for content injected by a `setTimeout` with no network activity. |
+| `waitMs` | `0` | Playwright backend only. Extra fixed wait (ms) after navigation, for content injected by a `setTimeout` with no network activity. Applies to every fetch, so prefer `waitForSelector` when you can name the element. |
+| `waitForSelector` | `""` (empty) | Playwright backend only. CSS selector to wait for after navigation, before reading the page. Returns as soon as the element appears (bounded by `requestTimeout`), so it is faster than a large blanket `waitMs`. A selector that never appears logs a warning and the fetch continues. Empty disables it; combines with `waitMs`. |
 | `libPath` | `<modulePath>/lib` | Directory cbjavaloader loads the jsoup jar from. |
 | `htmlContentTypePattern` | `^(text/html\|application/xhtml\+xml)(;.*)?$` | Only responses whose content type matches are parsed for links and canonical URLs. |
 
@@ -177,11 +180,15 @@ sees links and content that JavaScript adds after load. It needs some setup:
    }
    ```
 
-4. **Tune the wait** with `waitStrategy` and `waitMs`. `waitStrategy` is the
-   page load state to wait for (`"networkidle"` by default). `waitMs` is an
-   extra fixed wait applied after navigation — needed when content is injected
-   by a `setTimeout` with no network activity. Note that `waitMs` applies to
-   every page fetch, so a large crawl with a high `waitMs` is slow.
+4. **Tune the wait** with `waitStrategy`, `waitForSelector`, and `waitMs`.
+   `waitStrategy` is the page load state to wait for (`"networkidle"` by
+   default). `waitForSelector` waits for a specific element to appear and returns
+   as soon as it does, so it is the fast way to wait for a known JS-injected
+   element. `waitMs` is an extra fixed wait applied after navigation — needed
+   when content is injected by a `setTimeout` with no network activity and you
+   cannot name a selector. Note that `waitMs` applies to every page fetch, so a
+   large crawl with a high `waitMs` is slow; prefer `waitForSelector` where you
+   can.
 
 ## Output and splitting
 
