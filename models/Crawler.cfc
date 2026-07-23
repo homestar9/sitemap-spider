@@ -30,7 +30,16 @@ component accessors=true hint="Handles crawling of website URLs" {
      * cached instance, so crawl() cannot assume it starts clean.
      */
     private void function resetState() {
-        variables.pages = {};
+        // pages is an ordered array of page structs (each carries its own url),
+        // not a struct keyed by URL. A CFML struct's keys are case-insensitive, so
+        // keying pages by URL would merge two URLs that differ only in path case
+        // (/Page vs /page) even though the crawl visits them separately (the dedup
+        // gates are case-sensitive Java maps). An array keeps them distinct.
+        // claimProcessed() already guarantees each URL is recorded once, so the
+        // array never needs its own dedup. initAsyncState() swaps this for a
+        // ConcurrentHashMap keyed by URL (needed for the atomic maxPages cap); its
+        // values are collected back into an array in buildCrawlResult().
+        variables.pages = [];
         // The two dedup gates use Java LinkedHashMaps, not CFML structs, so their
         // keys compare with case-sensitive String.equals — the same rule the
         // async ConcurrentHashMaps use. This makes sync and async agree on which
@@ -43,14 +52,16 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.hostName = "";
         variables.excludedUrls = {}; // set of URLs explicitly excluded by the user
         variables.badUrls = {}; // urls that couldn't be fetched
-        variables.disallowedUrls = {}; // set of URLs skipped because robots.txt disallows them
         // Map of requested URL -> its redirect hop chain (array of { url, status }),
         // recorded only for fetches that followed at least one HTTP redirect. A
         // CFML struct in sync; initAsyncState swaps it for a ConcurrentHashMap.
         variables.redirects = {};
-        // Map of URL -> reason for links dropped during the crawl (nofollow /
-        // excluded / disallowed), surfaced in the result as the "ignored" array.
-        // A CFML struct in sync; initAsyncState swaps it for a ConcurrentHashMap.
+        // Map of URL -> reason for URLs dropped during the crawl, surfaced in the
+        // result as the "ignored" array. Reasons: "nofollow", "excluded",
+        // "disallowed", and "notAllowed" (off-host, wrong scheme, or asset pattern
+        // — only a rejected seed produces this one; discovered links are already
+        // filtered before they reach here). A CFML struct in sync; initAsyncState
+        // swaps it for a ConcurrentHashMap.
         variables.ignoredUrls = {};
         // robots.txt state, (re)loaded at the start of each crawl().
         variables.robotsBasePath = "/"; // site-root path the seed URL lives under
@@ -78,6 +89,10 @@ component accessors=true hint="Handles crawling of website URLs" {
      * Crawls a website starting from one or more URLs
      * @urls An array of URLs to start crawling
      * @excludeUrls An array of URLs to exclude from crawling
+     * @excludePattern A regex for whole-section excludes, matched case-insensitively
+     *           against the full URL. When passed non-empty it overrides the
+     *           excludePattern module setting for this crawl only; empty falls back
+     *           to the setting.
      * @runAsync When true, fetch URLs on several worker threads instead of one.
      *           Only honored when the browser backend reports supportsParallel();
      *           otherwise the crawl runs single-threaded (a downgrade is logged).
@@ -92,6 +107,7 @@ component accessors=true hint="Handles crawling of website URLs" {
     struct function crawl(
         required array urls,
         required array excludeUrls,
+        string excludePattern = "",
         boolean runAsync = false
     ) {
 
@@ -123,6 +139,15 @@ component accessors=true hint="Handles crawling of website URLs" {
             variables.excludedUrls[ parser.cleanUrl( excluded ) ] = true;
         }
 
+        // The section-exclude regex for this crawl. A non-empty excludePattern
+        // argument overrides the module setting for this run only; an empty
+        // argument falls back to the setting. isUrlExcluded reads this, not the
+        // setting directly, so a single crawl can exclude a section without
+        // changing global config.
+        variables.excludePattern = len( arguments.excludePattern )
+            ? arguments.excludePattern
+            : settings.excludePattern;
+
         // Decide whether this crawl runs in parallel. Async is honored when the
         // caller asked for it AND the browser backend is thread-safe. A robots
         // Crawl-delay no longer forces sync: applyCrawlDelay() spaces the fetches
@@ -149,10 +174,18 @@ component accessors=true hint="Handles crawling of website URLs" {
 
             logger.info( "CRAWLING:" & seedUrl );
 
-            if ( shouldEnqueue( seedUrl ) ) {
+            // Classify the seed once. An empty reason means enqueue it; any reason
+            // means skip it AND record it in ignored, so a caller can see why a seed
+            // was dropped (excluded, disallowed, or notAllowed). Without this, a
+            // rejected seed was only logged and vanished from the result. A
+            // disallowed seed is also recorded by enqueueDecision itself; the
+            // first-reason-wins dedup in appendIgnoredUrl keeps it a single entry.
+            var seedReason = enqueueDecision( seedUrl );
+            if ( !len( seedReason ) ) {
                 enqueue( seedUrl, 0 );
             } else {
-                logger.warn( "Invalid or non-matching URL skipped: #seedUrl#" );
+                appendIgnoredUrl( seedUrl, seedReason );
+                logger.warn( "Seed URL skipped (#seedReason#): #seedUrl#" );
             }
         }
 
@@ -236,12 +269,13 @@ component accessors=true hint="Handles crawling of website URLs" {
      * be skipped:
      *   - "notAllowed": off-host, wrong protocol, or matches notAllowedPattern.
      *   - "excluded": in the caller's exact excludeUrls set, or matches the
-     *     excludePattern module setting.
-     *   - "disallowed": robots.txt disallows it (also recorded in disallowedUrls,
-     *     so that existing result key keeps working).
+     *     effective excludePattern (per-crawl argument or module setting).
+     *   - "disallowed": robots.txt disallows it (also recorded in the ignored map
+     *     right here, so a disallowed seed lands in the result even though the seed
+     *     loop is the only caller that would otherwise not record it).
      *
-     * This is the single decision point shared by shouldEnqueue (seeds,
-     * meta-refresh) and the link-expansion loop, so the enqueue rule and the
+     * This is the single decision point shared by the seed loop, shouldEnqueue
+     * (meta-refresh), and the link-expansion loop, so the enqueue rule and the
      * ignored-reason reporting can never drift apart. The order matters: a URL is
      * classified by the first rule that rejects it.
      */
@@ -253,7 +287,7 @@ component accessors=true hint="Handles crawling of website URLs" {
             return "excluded";
         }
         if ( !isAllowedByRobots( arguments.url ) ) {
-            appendDisallowedUrl( arguments.url );
+            appendIgnoredUrl( arguments.url, "disallowed" );
             return "disallowed";
         }
         return "";
@@ -264,8 +298,8 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @url The URL to check
      *
      * Thin wrapper over enqueueDecision: a URL is enqueued only when no reason
-     * rejects it. A robots-disallowed URL is recorded in disallowedUrls by
-     * enqueueDecision so the caller can see what robots blocked; the set
+     * rejects it. A robots-disallowed URL is recorded in the ignored map by
+     * enqueueDecision so the caller can see what robots blocked; the map
      * de-duplicates repeats, so a disallowed URL is recorded once per crawl.
      */
     private boolean function shouldEnqueue( required string url ) {
@@ -491,9 +525,10 @@ component accessors=true hint="Handles crawling of website URLs" {
      * as-is. When it differs, the page is really "that other URL": it is validated,
      * checked against robots.txt, and checked against the processed set. Returns a
      * struct { url, skip }. skip is true when the effective URL is invalid,
-     * robots-disallowed (recorded in disallowedUrls), or already processed, in
-     * which case the caller must stop and not record the page. Otherwise the
-     * effective URL is added to the processed set so a later link to it is deduped.
+     * robots-disallowed (recorded in the ignored map with reason "disallowed"), or
+     * already processed, in which case the caller must stop and not record the
+     * page. Otherwise the effective URL is added to the processed set so a later
+     * link to it is deduped.
      */
     private struct function resolveEffectiveUrl( required string normalizedUrl, required string effectiveUrl ) {
         if ( !len( arguments.effectiveUrl ) || arguments.effectiveUrl == arguments.normalizedUrl ) {
@@ -505,7 +540,7 @@ component accessors=true hint="Handles crawling of website URLs" {
         }
         if ( !isAllowedByRobots( arguments.effectiveUrl ) ) {
             logger.info( "Effective URL disallowed by robots.txt: #arguments.effectiveUrl# for #arguments.normalizedUrl#" );
-            appendDisallowedUrl( arguments.effectiveUrl );
+            appendIgnoredUrl( arguments.effectiveUrl, "disallowed" );
             return { "url": arguments.effectiveUrl, "skip": true };
         }
         // Claim the effective URL. If another worker already recorded it (or it
@@ -545,7 +580,11 @@ component accessors=true hint="Handles crawling of website URLs" {
         required numeric depth,
         array images = []
     ) {
+        // The url is a field on the page struct, not a map key: pages is an array,
+        // so two URLs that differ only in path case (/Page vs /page) both survive
+        // instead of collapsing into one case-insensitive struct key.
         var page = {
+            "url": arguments.url,
             "lastModified": arguments.lastModified,
             "priority": arguments.priority,
             "depth": arguments.depth,
@@ -557,11 +596,13 @@ component accessors=true hint="Handles crawling of website URLs" {
                 variables.pageCount.decrementAndGet();
                 return;
             }
+            // Async keeps a ConcurrentHashMap keyed by URL for the atomic maxPages
+            // reservation above; buildCrawlResult collects its values into an array.
             variables.pages.put( arguments.url, page );
             return;
         }
 
-        variables.pages[ arguments.url ] = page;
+        variables.pages.append( page );
     }
 
     /**
@@ -643,16 +684,17 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @url URL to check
      *
      * excludeUrls is an exact, whole-URL match (the per-crawl argument). The
-     * settings.excludePattern is a regex matched with reFindNoCase against the
-     * full URL, for whole-section excludes like "/admin/". An empty excludePattern
-     * matches nothing, so it is skipped.
+     * effective excludePattern (variables.excludePattern, set in crawl() from the
+     * per-crawl argument or the module setting) is a regex matched with reFindNoCase
+     * against the full URL, for whole-section excludes like "/admin/". An empty
+     * excludePattern matches nothing, so it is skipped.
      */
     private boolean function isUrlExcluded( required string url ) {
         if ( variables.excludedUrls.keyExists( arguments.url ) ) {
             return true;
         }
-        return len( settings.excludePattern )
-            && reFindNoCase( settings.excludePattern, arguments.url ) > 0;
+        return len( variables.excludePattern )
+            && reFindNoCase( variables.excludePattern, arguments.url ) > 0;
     }
 
     private function getPriority( required numeric depth ) {
@@ -689,23 +731,11 @@ component accessors=true hint="Handles crawling of website URLs" {
     }
 
     /**
-     * Records a URL skipped because robots.txt disallows it, by adding it to the
-     * disallowedUrls set (so repeats from multiple pages are recorded once).
-     * @url The disallowed URL
-     */
-    private void function appendDisallowedUrl( required string url ) {
-        if ( variables.async ) {
-            variables.disallowedUrls.put( arguments.url, true );
-            return;
-        }
-        variables.disallowedUrls[ arguments.url ] = true;
-    }
-
-    /**
      * Records a link dropped during the crawl in the ignoredUrls map, keyed by URL
      * with the drop reason as the value.
      * @url The dropped URL
-     * @reason Why it was dropped ("nofollow", "excluded", or "disallowed")
+     * @reason Why it was dropped ("nofollow", "excluded", "disallowed", or
+     *   "notAllowed" — the last only for a rejected seed)
      *
      * The first reason recorded for a URL wins: the same URL can be dropped for
      * different reasons on different pages (e.g. nofollow on one page, a normal
@@ -748,7 +778,7 @@ component accessors=true hint="Handles crawling of website URLs" {
     private boolean function atMaxPages() {
         return variables.async
             ? ( variables.pageCount.get() >= settings.maxPages )
-            : ( structCount( variables.pages ) >= settings.maxPages );
+            : ( arrayLen( variables.pages ) >= settings.maxPages );
     }
 
     /**
@@ -765,7 +795,6 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.processedUrls = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.pages         = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.badUrls       = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
-        variables.disallowedUrls = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.ignoredUrls   = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.redirects     = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.pending       = createObject( "java", "java.util.concurrent.atomic.AtomicInteger" ).init( javaCast( "int", 0 ) );
@@ -884,33 +913,35 @@ component accessors=true hint="Handles crawling of website URLs" {
     }
 
     /**
-     * Builds the crawl result struct in the shape callers expect: pages and
-     * badUrls as CFML structs, processedUrls and disallowedUrls as arrays, an
-     * ignored report, a redirects report (array of { from, to, chain }), plus a
-     * runAsync flag. In async mode the internal state is java.util.concurrent
-     * maps, so it is copied into CFML structs/arrays here; in sync mode the state
-     * is already CFML structs.
+     * Builds the crawl result struct in the shape callers expect: pages as an
+     * array of page structs (each carrying its own url), badUrls as a CFML struct,
+     * processedUrls as an array, an ignored report (array of { url, reason }), a
+     * redirects report (array of { from, to, chain }), plus a runAsync flag. In
+     * async mode the internal state is java.util.concurrent maps, so it is copied
+     * into CFML arrays/structs here; in sync mode the state is already CFML values.
+     * There is no disallowedUrls key: robots-blocked URLs appear in ignored with
+     * reason "disallowed".
      */
     private struct function buildCrawlResult() {
         if ( variables.async ) {
             return {
-                "pages": javaMapToStruct( variables.pages ),
+                // Async pages is a ConcurrentHashMap keyed by URL (for the atomic
+                // maxPages cap); return its values as the array callers expect.
+                "pages": javaMapValues( variables.pages ),
                 "badUrls": javaMapToStruct( variables.badUrls ),
                 "processedUrls": javaMapKeys( variables.processedUrls ),
-                "disallowedUrls": javaMapKeys( variables.disallowedUrls ),
                 "ignored": buildIgnoredPairs(),
                 "redirects": buildRedirectPairs(),
                 "runAsync": true
             };
         }
         return {
+            // Sync pages is already an array of page structs.
             "pages": variables.pages,
             "badUrls": variables.badUrls,
             // processedUrls is a java.util.LinkedHashMap in sync mode, so its keys
-            // come out via javaMapKeys (not structKeyArray). disallowedUrls is
-            // still a CFML struct in sync mode.
+            // come out via javaMapKeys (not structKeyArray).
             "processedUrls": javaMapKeys( variables.processedUrls ),
-            "disallowedUrls": structKeyArray( variables.disallowedUrls ),
             "ignored": buildIgnoredPairs(),
             "redirects": buildRedirectPairs(),
             "runAsync": false
@@ -1000,6 +1031,22 @@ component accessors=true hint="Handles crawling of website URLs" {
     private array function javaMapKeys( required any javaMap ) {
         var out      = [];
         var iterator = arguments.javaMap.keySet().iterator();
+        while ( iterator.hasNext() ) {
+            out.append( iterator.next() );
+        }
+        return out;
+    }
+
+    /**
+     * Returns the values of a java.util.Map as a CFML array. Used for the async
+     * pages map (URL -> page struct), whose values are the page structs callers
+     * expect as an array. The order is not guaranteed (a ConcurrentHashMap is
+     * unordered), matching the rest of the async result.
+     * @javaMap The map whose values to collect
+     */
+    private array function javaMapValues( required any javaMap ) {
+        var out      = [];
+        var iterator = arguments.javaMap.values().iterator();
         while ( iterator.hasNext() ) {
             out.append( iterator.next() );
         }

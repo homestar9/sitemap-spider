@@ -2,8 +2,9 @@
  * Unit specs for SitemapGenerator.cfc.
  *
  * Covers generate() output shape and escaping, and the saveToFile() round-trip.
- * The generator has no injected dependencies, so no mocking is needed. Each page
- * struct is built by hand as { "<url>" : { lastModified, priority } }.
+ * The generator has no injected dependencies, so no mocking is needed. pages is
+ * an array of page structs (each { url, lastModified, priority[, images] }), built
+ * with the page() helper below.
  *
  * Local run recipe:
  *   1. box server start serverConfigFile=server-adobe@2023.json
@@ -32,16 +33,32 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		super.afterAll();
 	}
 
+	// Builds one page struct in the array shape generate()/generateSet() take. The
+	// images key is added only when passed, so a page without images stays
+	// image-free (the generator guards on the key).
+	private struct function page(
+		required string url,
+		required numeric priority,
+		any lastModified = "",
+		array images
+	){
+		var p = { url : arguments.url, lastModified : arguments.lastModified, priority : arguments.priority };
+		if ( !isNull( arguments.images ) ){
+			p.images = arguments.images;
+		}
+		return p;
+	}
+
 	function run(){
 		describe( "SitemapGenerator", function(){
 
 			describe( "generate()", function(){
 
 				it( "produces XML that parses into a urlset with one url per page", function(){
-					var pages = {
-						"http://example.test/a.cfm" : { lastModified : "", priority : 0.9 },
-						"http://example.test/b.cfm" : { lastModified : "", priority : 0.8 }
-					};
+					var pages = [
+						page( "http://example.test/a.cfm", 0.9 ),
+						page( "http://example.test/b.cfm", 0.8 )
+					];
 
 					var xml = variables.generator.generate( pages );
 					var doc = xmlParse( xml );
@@ -55,7 +72,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				it( "escapes an ampersand in a loc value so the XML stays valid", function(){
 					var rawUrl = "http://example.test/?a=1&b=2";
-					var pages  = { "#rawUrl#" : { lastModified : "", priority : 0.5 } };
+					var pages  = [ page( rawUrl, 0.5 ) ];
 
 					var xml = variables.generator.generate( pages );
 
@@ -70,12 +87,12 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "omits lastmod when it is empty and includes it when set", function(){
-					var withDate = variables.generator.generate( {
-						"http://example.test/dated.cfm" : { lastModified : "2026-07-20", priority : 0.5 }
-					} );
-					var withoutDate = variables.generator.generate( {
-						"http://example.test/undated.cfm" : { lastModified : "", priority : 0.5 }
-					} );
+					var withDate = variables.generator.generate( [
+						page( "http://example.test/dated.cfm", 0.5, "2026-07-20" )
+					] );
+					var withoutDate = variables.generator.generate( [
+						page( "http://example.test/undated.cfm", 0.5 )
+					] );
 
 					expect( withDate ).toInclude( "<lastmod>2026-07-20</lastmod>" );
 					expect( withoutDate.findNoCase( "<lastmod>" ) ).toBe( 0 );
@@ -85,23 +102,23 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					// A parsed date carries a time-of-day; <lastmod> must drop it and
 					// keep the zero-padded YYYY-MM-DD form.
 					var when = createDateTime( 2026, 3, 5, 14, 30, 0 );
-					var xml  = variables.generator.generate( {
-						"http://example.test/a.cfm" : { lastModified : when, priority : 0.5 }
-					} );
+					var xml  = variables.generator.generate( [
+						page( "http://example.test/a.cfm", 0.5, when )
+					] );
 					expect( xml ).toInclude( "<lastmod>2026-03-05</lastmod>" );
 				} );
 
 				it( "renders priority with one decimal place", function(){
-					var xml = variables.generator.generate( {
-						"http://example.test/a.cfm" : { lastModified : "", priority : 1.0 }
-					} );
+					var xml = variables.generator.generate( [
+						page( "http://example.test/a.cfm", 1.0 )
+					] );
 					expect( xml ).toInclude( "<priority>1.0</priority>" );
 				} );
 
 				it( "always renders priority", function(){
-					var xml = variables.generator.generate( {
-						"http://example.test/a.cfm" : { lastModified : "", priority : 0.5 }
-					} );
+					var xml = variables.generator.generate( [
+						page( "http://example.test/a.cfm", 0.5 )
+					] );
 					expect( xml ).toInclude( "<priority>0.5</priority>" );
 				} );
 
@@ -111,7 +128,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					// 2026-03-05T14:30:00+00:00.
 					var when = createDateTime( 2026, 3, 5, 14, 30, 0 );
 					var xml  = variables.generator.generate(
-						pages         = { "http://example.test/a.cfm" : { lastModified : when, priority : 0.5 } },
+						pages         = [ page( "http://example.test/a.cfm", 0.5, when ) ],
 						lastModFormat = "datetime"
 					);
 					// Match the W3C datetime shape without hard-coding the offset,
@@ -123,7 +140,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					// The generator also receives date strings (e.g. from tests). A
 					// date-only string has no time, so it renders at 00:00:00.
 					var xml = variables.generator.generate(
-						pages         = { "http://example.test/a.cfm" : { lastModified : "2026-07-20", priority : 0.5 } },
+						pages         = [ page( "http://example.test/a.cfm", 0.5, "2026-07-20" ) ],
 						lastModFormat = "datetime"
 					);
 					expect( xml ).toMatch( "<lastmod>2026-07-20T00:00:00[+-]\d\d:\d\d</lastmod>" );
@@ -131,21 +148,21 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				it( "still emits date-only lastmod by default", function(){
 					// Default (no lastModFormat) keeps the date-only W3C form.
-					var xml = variables.generator.generate( {
-						"http://example.test/a.cfm" : { lastModified : "2026-07-20", priority : 0.5 }
-					} );
+					var xml = variables.generator.generate( [
+						page( "http://example.test/a.cfm", 0.5, "2026-07-20" )
+					] );
 					expect( xml ).toInclude( "<lastmod>2026-07-20</lastmod>" );
 					expect( xml ).notToMatch( "T\d\d:\d\d:\d\d" );
 				} );
 
 				it( "adds the image namespace and <image:image> entries when includeImages is on", function(){
-					var pages = {
-						"http://example.test/a.cfm" : {
-							lastModified : "",
-							priority     : 0.5,
-							images       : [ "http://example.test/img/1.jpg", "http://cdn.other/2.png" ]
-						}
-					};
+					var pages = [
+						page(
+							url    = "http://example.test/a.cfm",
+							priority = 0.5,
+							images = [ "http://example.test/img/1.jpg", "http://cdn.other/2.png" ]
+						)
+					];
 					var xml = variables.generator.generate( pages = pages, includeImages = true );
 
 					expect( xml ).toInclude( 'xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"' );
@@ -159,12 +176,12 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				it( "leaves images out and keeps output byte-identical when includeImages is off", function(){
 					// A page that happens to carry an images array must produce the
 					// exact same XML as one without it when includeImages is off.
-					var withImages = variables.generator.generate( {
-						"http://example.test/a.cfm" : { lastModified : "", priority : 0.5, images : [ "http://example.test/x.jpg" ] }
-					} );
-					var withoutImages = variables.generator.generate( {
-						"http://example.test/a.cfm" : { lastModified : "", priority : 0.5 }
-					} );
+					var withImages = variables.generator.generate( [
+						page( url = "http://example.test/a.cfm", priority = 0.5, images = [ "http://example.test/x.jpg" ] )
+					] );
+					var withoutImages = variables.generator.generate( [
+						page( "http://example.test/a.cfm", 0.5 )
+					] );
 					expect( withImages ).toBe( withoutImages );
 					expect( withImages.findNoCase( "image:" ) ).toBe( 0 );
 				} );
@@ -174,10 +191,10 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			describe( "generateSet()", function(){
 
 				it( "returns a single urlset when under the limits", function(){
-					var pages = {
-						"http://example.test/a.cfm" : { lastModified : "", priority : 0.9 },
-						"http://example.test/b.cfm" : { lastModified : "", priority : 0.8 }
-					};
+					var pages = [
+						page( "http://example.test/a.cfm", 0.9 ),
+						page( "http://example.test/b.cfm", 0.8 )
+					];
 
 					var out = variables.generator.generateSet( pages = pages, maxUrls = 50000 );
 
@@ -189,10 +206,10 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "single output matches generate() byte-for-byte", function(){
-					var pages = {
-						"http://example.test/a.cfm" : { lastModified : "2026-07-20", priority : 0.9 },
-						"http://example.test/b.cfm" : { lastModified : "", priority : 0.8 }
-					};
+					var pages = [
+						page( "http://example.test/a.cfm", 0.9, "2026-07-20" ),
+						page( "http://example.test/b.cfm", 0.8 )
+					];
 
 					var out = variables.generator.generateSet( pages = pages );
 
@@ -200,13 +217,13 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "splits into an index plus child sitemaps when over maxUrls", function(){
-					var pages = {
-						"http://example.test/1.cfm" : { lastModified : "", priority : 0.5 },
-						"http://example.test/2.cfm" : { lastModified : "", priority : 0.5 },
-						"http://example.test/3.cfm" : { lastModified : "", priority : 0.5 },
-						"http://example.test/4.cfm" : { lastModified : "", priority : 0.5 },
-						"http://example.test/5.cfm" : { lastModified : "", priority : 0.5 }
-					};
+					var pages = [
+						page( "http://example.test/1.cfm", 0.5 ),
+						page( "http://example.test/2.cfm", 0.5 ),
+						page( "http://example.test/3.cfm", 0.5 ),
+						page( "http://example.test/4.cfm", 0.5 ),
+						page( "http://example.test/5.cfm", 0.5 )
+					];
 
 					var out = variables.generator.generateSet(
 						pages         = pages,
@@ -239,11 +256,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "derives child filenames from primaryFilename", function(){
-					var pages = {
-						"http://example.test/1.cfm" : { lastModified : "", priority : 0.5 },
-						"http://example.test/2.cfm" : { lastModified : "", priority : 0.5 },
-						"http://example.test/3.cfm" : { lastModified : "", priority : 0.5 }
-					};
+					var pages = [
+						page( "http://example.test/1.cfm", 0.5 ),
+						page( "http://example.test/2.cfm", 0.5 ),
+						page( "http://example.test/3.cfm", 0.5 )
+					];
 
 					var out = variables.generator.generateSet(
 						pages           = pages,
@@ -258,11 +275,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "splits by byte size when maxBytes is small", function(){
-					var pages = {
-						"http://example.test/1.cfm" : { lastModified : "", priority : 0.5 },
-						"http://example.test/2.cfm" : { lastModified : "", priority : 0.5 },
-						"http://example.test/3.cfm" : { lastModified : "", priority : 0.5 }
-					};
+					var pages = [
+						page( "http://example.test/1.cfm", 0.5 ),
+						page( "http://example.test/2.cfm", 0.5 ),
+						page( "http://example.test/3.cfm", 0.5 )
+					];
 
 					// A tiny byte budget forces one URL per file even though the URL
 					// count is well under maxUrls.
@@ -278,10 +295,10 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "sets the index lastmod to the newest page date in each chunk", function(){
-					var pages = {
-						"http://example.test/1.cfm" : { lastModified : "2026-01-10", priority : 0.5 },
-						"http://example.test/2.cfm" : { lastModified : "2026-03-25", priority : 0.5 }
-					};
+					var pages = [
+						page( "http://example.test/1.cfm", 0.5, "2026-01-10" ),
+						page( "http://example.test/2.cfm", 0.5, "2026-03-25" )
+					];
 
 					var out = variables.generator.generateSet(
 						pages         = pages,
@@ -296,11 +313,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "gives child filenames and index <loc> a .gz suffix when gzip is on", function(){
-					var pages = {
-						"http://example.test/1.cfm" : { lastModified : "", priority : 0.5 },
-						"http://example.test/2.cfm" : { lastModified : "", priority : 0.5 },
-						"http://example.test/3.cfm" : { lastModified : "", priority : 0.5 }
-					};
+					var pages = [
+						page( "http://example.test/1.cfm", 0.5 ),
+						page( "http://example.test/2.cfm", 0.5 ),
+						page( "http://example.test/3.cfm", 0.5 )
+					];
 
 					var out = variables.generator.generateSet(
 						pages         = pages,
@@ -324,9 +341,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			describe( "saveToFile()", function(){
 
 				it( "writes the XML and reads back exactly what was written", function(){
-					var xml = variables.generator.generate( {
-						"http://example.test/a.cfm" : { lastModified : "", priority : 0.5 }
-					} );
+					var xml = variables.generator.generate( [
+						page( "http://example.test/a.cfm", 0.5 )
+					] );
 					variables.tempFile = getTempDirectory() & "sitemap-generator-spec.xml";
 
 					variables.generator.saveToFile( xml, variables.tempFile );
@@ -336,9 +353,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "creates the parent directory when it does not exist", function(){
-					var xml = variables.generator.generate( {
-						"http://example.test/a.cfm" : { lastModified : "", priority : 0.5 }
-					} );
+					var xml = variables.generator.generate( [
+						page( "http://example.test/a.cfm", 0.5 )
+					] );
 					// A subdirectory that does not exist yet; saveToFile must create it.
 					variables.tempDir = getTempDirectory() & "sitemap-generator-spec-dir-" & getTickCount() & "/";
 					var target        = variables.tempDir & "nested/sitemap.xml";
@@ -350,9 +367,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "writes gzip-compressed bytes that gunzip back to the exact XML", function(){
-					var xml = variables.generator.generate( {
-						"http://example.test/a.cfm" : { lastModified : "", priority : 0.5 }
-					} );
+					var xml = variables.generator.generate( [
+						page( "http://example.test/a.cfm", 0.5 )
+					] );
 					variables.tempFile = getTempDirectory() & "sitemap-generator-spec-" & getTickCount() & ".xml.gz";
 
 					variables.generator.saveToFile( xml, variables.tempFile, true );

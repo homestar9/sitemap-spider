@@ -80,6 +80,31 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		}
 	}
 
+	// result.pages is now an array of page structs (each with a url field), not a
+	// struct keyed by URL, so these two helpers replace the old toHaveKey/
+	// structKeyArray idioms.
+
+	// Every page's url field, for set comparisons.
+	private array function pageUrls( required array pages ){
+		var out = [];
+		for ( var page in arguments.pages ){
+			out.append( page.url );
+		}
+		return out;
+	}
+
+	// True when some page's url matches exactly. compare() is used (not ==) so the
+	// match is case-sensitive, mirroring the crawl's case-sensitive dedup — /Page
+	// and /page are distinct pages.
+	private boolean function hasPage( required array pages, required string url ){
+		for ( var page in arguments.pages ){
+			if ( compare( page.url, arguments.url ) == 0 ){
+				return true;
+			}
+		}
+		return false;
+	}
+
 	function run(){
 		describe( "Crawler correctness fixes", function(){
 
@@ -135,9 +160,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
-				expect( result.pages ).toHaveKey( variables.root );
-				expect( result.pages ).toHaveKey( aUrl );
-				expect( result.pages ).notToHaveKey( bUrl );
+				expect( hasPage( result.pages, variables.root ) ).toBeTrue();
+				expect( hasPage( result.pages, aUrl ) ).toBeTrue();
+				expect( hasPage( result.pages, bUrl ) ).toBeFalse();
 				// b is never even fetched: the depth check returns before the fetch.
 				expect( ctx.fake.getRequestedUrls().findNoCase( bUrl ) ).toBe( 0 );
 			} );
@@ -159,8 +184,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				// The cutoff engaged: exactly maxPages pages were recorded, not all
 				// five (root + four). Task 06 made the bound exact: crawlUrl checks
-				// structCount >= maxPages before appending, so the count is maxPages.
-				expect( structCount( result.pages ) ).toBe( 2 );
+				// the page count >= maxPages before appending, so the count is maxPages.
+				expect( result.pages.len() ).toBe( 2 );
 			} );
 
 			it( "records a page under its canonical URL, not the fetched URL", function(){
@@ -177,10 +202,10 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
-				expect( result.pages ).toHaveKey( aboutCanonical );
-				expect( result.pages ).notToHaveKey( aboutIndex );
+				expect( hasPage( result.pages, aboutCanonical ) ).toBeTrue();
+				expect( hasPage( result.pages, aboutIndex ) ).toBeFalse();
 				// root + about/ only; the fetched about/index.cfm is not a second entry.
-				expect( structCount( result.pages ) ).toBe( 2 );
+				expect( result.pages.len() ).toBe( 2 );
 			} );
 
 			it( "records a fetch failure in badUrls and skips the page", function(){
@@ -196,8 +221,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				expect( result.badUrls ).toHaveKey( badUrl );
 				expect( result.badUrls[ badUrl ] ).toHaveKey( "message" );
-				expect( result.pages ).notToHaveKey( badUrl );
-				expect( result.pages ).toHaveKey( goodUrl );
+				expect( hasPage( result.pages, badUrl ) ).toBeFalse();
+				expect( hasPage( result.pages, goodUrl ) ).toBeTrue();
 			} );
 
 			it( "follows a meta-refresh and records the target, not the interstitial", function(){
@@ -216,8 +241,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
-				expect( result.pages ).toHaveKey( newUrl );
-				expect( result.pages ).notToHaveKey( oldUrl );
+				expect( hasPage( result.pages, newUrl ) ).toBeTrue();
+				expect( hasPage( result.pages, oldUrl ) ).toBeFalse();
 			} );
 
 			it( "records the final URL of an HTTP redirect, not the requested URL", function(){
@@ -232,8 +257,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
-				expect( result.pages ).toHaveKey( newUrl );
-				expect( result.pages ).notToHaveKey( oldUrl );
+				expect( hasPage( result.pages, newUrl ) ).toBeTrue();
+				expect( hasPage( result.pages, oldUrl ) ).toBeFalse();
 				// newUrl is recorded via the redirect from oldUrl; it is never fetched
 				// on its own, so the browser sees only root + oldUrl.
 				expect( ctx.fake.getRequestedUrls().findNoCase( newUrl ) ).toBe( 0 );
@@ -251,8 +276,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [ dropUrl ] );
 
 				expect( ctx.fake.getRequestedUrls().findNoCase( dropUrl ) ).toBe( 0 );
-				expect( result.pages ).notToHaveKey( dropUrl );
-				expect( result.pages ).toHaveKey( keepUrl );
+				expect( hasPage( result.pages, dropUrl ) ).toBeFalse();
+				expect( hasPage( result.pages, keepUrl ) ).toBeTrue();
 			} );
 
 			it( "reports a followed HTTP redirect in the redirects report", function(){
@@ -321,8 +346,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
 					expect( ctx.fake.getRequestedUrls().findNoCase( adminUrl ) ).toBe( 0 );
-					expect( result.pages ).notToHaveKey( adminUrl );
-					expect( result.pages ).toHaveKey( keepUrl );
+					expect( hasPage( result.pages, adminUrl ) ).toBeFalse();
+					expect( hasPage( result.pages, keepUrl ) ).toBeTrue();
 
 					var reasons = {};
 					for ( var entry in result.ignored ) {
@@ -358,9 +383,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				expect( asyncResult.runAsync ).toBeTrue();
 				// root + p1..p8 = 9 pages, recorded once each despite p1 being
 				// linked back to from every page.
-				expect( structCount( asyncResult.pages ) ).toBe( 9 );
-				expect( structKeyArray( asyncResult.pages ).sort( "textnocase" ) )
-					.toBe( structKeyArray( syncResult.pages ).sort( "textnocase" ) );
+				expect( asyncResult.pages.len() ).toBe( 9 );
+				expect( pageUrls( asyncResult.pages ).sort( "textnocase" ) )
+					.toBe( pageUrls( syncResult.pages ).sort( "textnocase" ) );
 				expect( asyncResult.badUrls ).toBeEmpty();
 			} );
 
@@ -377,8 +402,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				expect( result.runAsync ).toBeTrue();
 				expect( result.badUrls ).toHaveKey( badUrl );
-				expect( result.pages ).toHaveKey( goodUrl );
-				expect( result.pages ).notToHaveKey( badUrl );
+				expect( hasPage( result.pages, goodUrl ) ).toBeTrue();
+				expect( hasPage( result.pages, badUrl ) ).toBeFalse();
 			} );
 
 			it( "still runs in parallel when robots.txt sets a Crawl-delay, spacing the fetches", function(){
@@ -398,7 +423,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				expect( result.runAsync ).toBeTrue();
 				// root + p1..p3 = 4 pages, all recorded despite the delay spacing.
-				expect( structCount( result.pages ) ).toBe( 4 );
+				expect( result.pages.len() ).toBe( 4 );
 			} );
 
 			it( "never records more than maxPages under parallel crawling", function(){
@@ -415,7 +440,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
 
 				expect( result.runAsync ).toBeTrue();
-				expect( structCount( result.pages ) ).toBeLTE( 3 );
+				expect( result.pages.len() ).toBeLTE( 3 );
 			} );
 
 			it( "downgrades to single-threaded when the backend is not parallel-safe", function(){
@@ -432,7 +457,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
 
 				expect( result.runAsync ).toBeFalse();
-				expect( structCount( result.pages ) ).toBe( 5 );
+				expect( result.pages.len() ).toBe( 5 );
 			} );
 
 		} );
@@ -458,9 +483,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
-				expect( result.pages ).toHaveKey( dupUrl );
+				expect( hasPage( result.pages, dupUrl ) ).toBeTrue();
 				// root + dup only; the uppercase-host variant is not a second entry.
-				expect( structCount( result.pages ) ).toBe( 2 );
+				expect( result.pages.len() ).toBe( 2 );
 			} );
 
 			it( "dedups a URL differing only in host case (parallel)", function(){
@@ -473,8 +498,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
 
 				expect( result.runAsync ).toBeTrue();
-				expect( result.pages ).toHaveKey( dupUrl );
-				expect( structCount( result.pages ) ).toBe( 2 );
+				expect( hasPage( result.pages, dupUrl ) ).toBeTrue();
+				expect( result.pages.len() ).toBe( 2 );
 			} );
 
 			// A redirect whose final URL carries CFID/CFTOKEN must be recorded under
@@ -490,9 +515,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
-				expect( result.pages ).toHaveKey( cleanNew );
-				expect( result.pages ).notToHaveKey( cleanNew & "?CFID=9&CFTOKEN=8" );
-				expect( result.pages ).notToHaveKey( oldUrl );
+				expect( hasPage( result.pages, cleanNew ) ).toBeTrue();
+				expect( hasPage( result.pages, cleanNew & "?CFID=9&CFTOKEN=8" ) ).toBeFalse();
+				expect( hasPage( result.pages, oldUrl ) ).toBeFalse();
 			} );
 
 			it( "records a redirect target's clean URL, stripping session tokens (parallel)", function(){
@@ -506,9 +531,138 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
 
 				expect( result.runAsync ).toBeTrue();
-				expect( result.pages ).toHaveKey( cleanNew );
-				expect( result.pages ).notToHaveKey( cleanNew & "?CFID=9&CFTOKEN=8" );
-				expect( result.pages ).notToHaveKey( oldUrl );
+				expect( hasPage( result.pages, cleanNew ) ).toBeTrue();
+				expect( hasPage( result.pages, cleanNew & "?CFID=9&CFTOKEN=8" ) ).toBeFalse();
+				expect( hasPage( result.pages, oldUrl ) ).toBeFalse();
+			} );
+
+		} );
+
+		// Task 23: a rejected start/seed URL used to be only logged. Now every seed
+		// rejection is reported in ignored with its reason, so a caller can see why
+		// a seed was skipped. Each case passes a good primary seed (urls[1], which
+		// sets the host and loads robots) plus one bad seed.
+		describe( "crawl() seed rejection reporting", function(){
+
+			// Collects the ignored array into a { url : reason } struct.
+			var reasonsOf = function( required array ignored ){
+				var out = {};
+				for ( var entry in arguments.ignored ){
+					out[ entry.url ] = entry.reason;
+				}
+				return out;
+			};
+
+			it( "reports an excluded seed in ignored with reason 'excluded'", function(){
+				var badSeed = variables.root & "private.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, "" );
+
+				var result = ctx.crawler.crawl(
+					urls        = [ variables.root, badSeed ],
+					excludeUrls = [ badSeed ]
+				);
+
+				expect( hasPage( result.pages, badSeed ) ).toBeFalse();
+				expect( ctx.fake.getRequestedUrls().findNoCase( badSeed ) ).toBe( 0 );
+				expect( reasonsOf( result.ignored )[ badSeed ] ).toBe( "excluded" );
+			} );
+
+			it( "reports a robots-disallowed seed in ignored with reason 'disallowed'", function(){
+				var badSeed = variables.root & "secret.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.setRobots( "User-agent: *" & chr( 10 ) & "Disallow: /secret" );
+				ctx.fake.addPage( variables.root, "" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root, badSeed ], excludeUrls = [] );
+
+				expect( hasPage( result.pages, badSeed ) ).toBeFalse();
+				expect( reasonsOf( result.ignored )[ badSeed ] ).toBe( "disallowed" );
+			} );
+
+			it( "reports an off-host seed in ignored with reason 'notAllowed'", function(){
+				var badSeed = "http://other.test/x.cfm"; // different host than urls[1]
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, "" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root, badSeed ], excludeUrls = [] );
+
+				expect( hasPage( result.pages, badSeed ) ).toBeFalse();
+				expect( reasonsOf( result.ignored )[ badSeed ] ).toBe( "notAllowed" );
+			} );
+
+		} );
+
+		// Task 23: the per-crawl excludePattern argument overrides the module
+		// setting for that crawl only.
+		describe( "crawl() per-crawl excludePattern argument", function(){
+
+			it( "overrides the module setting for a single crawl", function(){
+				var keepUrl  = variables.root & "admin/keep.cfm"; // matched only by the module setting
+				var dropUrl  = variables.root & "beta/drop.cfm";  // matched only by the per-call arg
+
+				// Module setting excludes /admin/; the per-call arg replaces it with
+				// /beta/, so /admin/ is now crawled and /beta/ is skipped.
+				var ctx = buildCrawler( { excludePattern : "/admin/" } );
+				ctx.fake.addPage( variables.root, link( keepUrl ) & link( dropUrl ) );
+				ctx.fake.addPage( keepUrl, "" );
+				ctx.fake.addPage( dropUrl, "" );
+
+				var result = ctx.crawler.crawl(
+					urls           = [ variables.root ],
+					excludeUrls    = [],
+					excludePattern = "/beta/"
+				);
+
+				// /admin/ is no longer excluded (the module setting was overridden).
+				expect( hasPage( result.pages, keepUrl ) ).toBeTrue();
+				// /beta/ is excluded by the per-call pattern and reported.
+				expect( hasPage( result.pages, dropUrl ) ).toBeFalse();
+				var reasons = {};
+				for ( var entry in result.ignored ){
+					reasons[ entry.url ] = entry.reason;
+				}
+				expect( reasons[ dropUrl ] ).toBe( "excluded" );
+			} );
+
+			it( "falls back to the module setting when empty", function(){
+				var adminUrl = variables.root & "admin/secret.cfm";
+
+				var ctx = buildCrawler( { excludePattern : "/admin/" } );
+				ctx.fake.addPage( variables.root, link( adminUrl ) );
+				ctx.fake.addPage( adminUrl, "" );
+
+				// Empty excludePattern argument -> the module setting still applies.
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], excludePattern = "" );
+
+				expect( hasPage( result.pages, adminUrl ) ).toBeFalse();
+			} );
+
+		} );
+
+		// Task 23 regression: pages is an array, not a struct keyed by URL, so two
+		// URLs that differ only in path case stay separate. A struct would have
+		// merged them because CFML struct keys are case-insensitive.
+		describe( "crawl() records case-variant URLs separately", function(){
+
+			it( "keeps /Page and /page as two pages", function(){
+				var upperUrl = variables.root & "Page.cfm";
+				var lowerUrl = variables.root & "page.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( upperUrl ) & link( lowerUrl ) );
+				ctx.fake.addPage( upperUrl, "" );
+				ctx.fake.addPage( lowerUrl, "" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				// root + both case variants = 3 distinct pages.
+				expect( result.pages.len() ).toBe( 3 );
+				expect( hasPage( result.pages, upperUrl ) ).toBeTrue();
+				expect( hasPage( result.pages, lowerUrl ) ).toBeTrue();
 			} );
 
 		} );

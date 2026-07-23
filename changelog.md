@@ -29,15 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `url`; the host, `robots.txt` base, and split-file base URL still come from the
   first `url`, so all seeds must share its host.
 - `ignored` key in the crawl result: an array of `{ url, reason }` structs for
-  links the crawl dropped, so you can see what was skipped and why. Reasons are
+  URLs the crawl dropped, so you can see what was skipped and why. Reasons are
   `"nofollow"` (a `rel="nofollow"` link), `"excluded"` (matched `excludeUrls` or
-  `excludePattern`), and `"disallowed"` (blocked by `robots.txt`). The existing
-  `disallowedUrls` array is unchanged; robots-blocked URLs appear in both.
+  `excludePattern`), `"disallowed"` (blocked by `robots.txt`), and `"notAllowed"`
+  (a rejected start/seed URL that is off-host, the wrong scheme, or an asset URL).
+  A rejected start or seed URL is reported here too.
 - `excludePattern` module setting: a regex matched case-insensitively against the
   full URL for whole-section excludes (e.g. `/admin/`). A match skips the URL and
   reports it in `ignored` with reason `"excluded"`. This is separate from the
   per-crawl exact-URL `excludeUrls` argument. Defaults to empty (no pattern
   exclusion).
+- `excludePattern` argument on `SitemapService.create()`: the same section-exclude
+  regex, per crawl. When passed non-empty it overrides the `excludePattern` module
+  setting for that crawl only; empty falls back to the setting. Lets one crawl
+  exclude a section without changing global config.
 - `waitForSelector` module setting (Playwright backend): a CSS selector to wait
   for after navigation, so you can wait for a known JS-injected element instead
   of a large blanket `waitMs`. It returns as soon as the element appears (bounded
@@ -64,6 +69,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Crawl-delay` seconds apart across the workers, so a delayed site can still be
   crawled in parallel. A crawl still runs single-threaded only when the browser
   backend is not parallel-safe (e.g. Playwright).
+- **Breaking:** the crawl result `pages` is now an **array** of page structs
+  (each `{ url, lastModified, priority, depth, images }`), not a struct keyed by
+  URL. A CFML struct's keys are case-insensitive, so keying pages by URL merged
+  two URLs that differ only in path case (`/Page` vs `/page`) even though the
+  crawl visits them separately; an array keeps them distinct. `SitemapGenerator`'s
+  `generate()` and `generateSet()` now take `pages` as an array too.
+- A rejected start or seed URL is now reported in `ignored` with its reason
+  (`"excluded"`, `"disallowed"`, or the new `"notAllowed"`), instead of only being
+  logged.
+
+### Removed
+
+- **Breaking:** the `disallowedUrls` array is gone from the crawl result. URLs
+  skipped by `robots.txt` are reported in `ignored` with reason `"disallowed"`,
+  which already carried them, so the separate array was redundant.
 
 ----
 

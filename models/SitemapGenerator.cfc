@@ -18,7 +18,8 @@ component {
      * page count/size that may exceed the sitemaps.org limits should use
      * generateSet(), which splits into child sitemaps plus an index.
      *
-     * @pages (required struct) pages to generate the sitemap for
+     * @pages (required array) page structs to generate the sitemap for, each with
+     *   a url field plus lastModified, priority, and (when includeImages) images
      * @lastModFormat "date" for date-only <lastmod> (default), "datetime" for the
      *   full W3C timestamp. See formatLastMod.
      * @includeImages when true, each page's images array is emitted as
@@ -27,14 +28,14 @@ component {
      *   byte-identical to the pre-image behavior.
      */
     function generate(
-        required struct pages,
+        required array pages,
         string lastModFormat = "date",
         boolean includeImages = false
     ) {
         var xml = variables.xmlHeader & urlsetOpenTag( arguments.includeImages );
-        pages.each( ( pageUrl, data ) => {
-            xml &= buildUrlEntry( pageUrl, data, lastModFormat, includeImages );
-        } );
+        for ( var data in arguments.pages ) {
+            xml &= buildUrlEntry( data, lastModFormat, includeImages );
+        }
         xml &= variables.urlsetClose;
         return xml;
     }
@@ -56,7 +57,8 @@ component {
      * from (e.g. "https://example.com/"). Child filenames are derived from
      * primaryFilename by inserting "-N" before the extension.
      *
-     * @pages (required struct) pages to generate the sitemap for
+     * @pages (required array) page structs to generate the sitemap for, each with
+     *   a url field plus lastModified, priority, and (when includeImages) images
      * @publicBaseUrl absolute URL prefix the child sitemaps are served from
      * @primaryFilename the index/single filename; children insert "-N" before its extension
      * @maxUrls per-file URL-count limit (sitemaps.org caps this at 50000)
@@ -70,7 +72,7 @@ component {
      *   envelope tag and byte accounting. See generate.
      */
     function generateSet(
-        required struct pages,
+        required array pages,
         string publicBaseUrl = "",
         string primaryFilename = "sitemap.xml",
         numeric maxUrls = 50000,
@@ -93,9 +95,8 @@ component {
         var chunks  = [];
         var current = ""; // becomes a struct once the first entry is placed
 
-        for ( var pageUrl in arguments.pages ) {
-            var data       = arguments.pages[ pageUrl ];
-            var entry      = buildUrlEntry( pageUrl, data, arguments.lastModFormat, arguments.includeImages );
+        for ( var data in arguments.pages ) {
+            var entry      = buildUrlEntry( data, arguments.lastModFormat, arguments.includeImages );
             var entryBytes = byteLength( entry );
 
             // Roll to a new chunk only when the current one already holds an
@@ -176,20 +177,18 @@ component {
      * Build the <url>...</url> markup for one page. Shared by generate() and
      * generateSet() so both emit identical entries.
      *
-     * @url the page URL (used as the <loc>)
-     * @data the page struct with lastModified and priority keys (and images when
-     *   includeImages is on)
+     * @data the page struct with url, lastModified, and priority keys (and images
+     *   when includeImages is on). The url field becomes the <loc>.
      * @lastModFormat "date" or "datetime" for the <lastmod> element
      * @includeImages when true, emit an <image:image> for each URL in data.images
      */
     private string function buildUrlEntry(
-        required string url,
         required struct data,
         string lastModFormat = "date",
         boolean includeImages = false
     ) {
         var entry = '<url>';
-        entry &= '<loc>#xmlFormat( arguments.url )#</loc>';
+        entry &= '<loc>#xmlFormat( arguments.data.url )#</loc>';
         // The sitemaps.org protocol requires W3C datetime for <lastmod>. Emit it
         // only when a real date was recorded; formatLastMod picks date-only or the
         // full timestamp based on lastModFormat.

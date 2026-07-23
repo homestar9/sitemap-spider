@@ -25,6 +25,11 @@ component
      *   must share the host of `url`: the host, robots.txt base, and split-file
      *   base URL are all taken from the first `url`, not from seedUrls.
      * @excludeUrls Array of URLs to exclude from crawling
+     * @excludePattern Optional regex for whole-section excludes, matched
+     *   case-insensitively against the full URL (e.g. "/admin/"). When non-empty it
+     *   overrides the excludePattern module setting for this crawl only; empty falls
+     *   back to the setting. A match skips the URL and reports it in `ignored` with
+     *   reason "excluded". Separate from the exact-URL excludeUrls argument.
      * @filePath Optional full path to save the sitemap XML to. When set, the XML
      *   is written there (creating the directory if needed) and the return struct
      *   reports saved=true. A write failure throws sitemap-spider.SaveFailed. When
@@ -45,6 +50,7 @@ component
         required any url, // String or array of strings
         array seedUrls = [], // Extra start URLs for orphan pages not linked from url
         array excludeUrls = [], // Array of URLs to exclude from crawling
+        string excludePattern = "", // Per-crawl section-exclude regex; overrides the module setting when non-empty
         string filePath = "", // Optional file path to save the sitemap XML to
         string publicBaseUrl = "", // Absolute URL prefix for <sitemapindex> entries
         boolean runAsync // Defaults to settings.runAsync below
@@ -69,6 +75,7 @@ component
         var result = crawler.crawl(
             urls = crawlSeeds,
             excludeUrls = arguments.excludeUrls,
+            excludePattern = arguments.excludePattern,
             runAsync = arguments.runAsync
         );
 
@@ -148,7 +155,6 @@ component
             "duration": getTickCount() - start,
             "processedUrls": result.processedUrls,
             "badUrls": result.badUrls,
-            "disallowedUrls": result.disallowedUrls,
             "ignored": result.ignored,
             "redirects": result.redirects,
             "runAsync": result.runAsync,

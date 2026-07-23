@@ -74,16 +74,15 @@ var result = getInstance( "SitemapService@sitemap-spider" ).create(
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `pages` | struct | Crawled pages, keyed by URL. Each value is `{ lastModified, priority, depth }`. |
+| `pages` | array | Crawled pages, one struct each: `{ url, lastModified, priority, depth, images }`. An array (not a struct keyed by URL) so two URLs that differ only in path case (`/Page` vs `/page`) stay separate. |
 | `sitemap` | string | The primary sitemap XML. A `<urlset>` for a normal crawl, or a `<sitemapindex>` when the crawl is split. |
 | `type` | string | `"single"` for one file, `"index"` when the output was split into a sitemap index plus child files. |
 | `sitemaps` | array | The child sitemap files when `type` is `"index"` (each with `filename`, `xml`, and, if saved, `filePath`). Empty-ish for a single sitemap. |
 | `sitemapCount` | number | Number of sitemap files: `1` for a single sitemap, otherwise the child count. |
 | `duration` | number | Total crawl + generate time in milliseconds. |
-| `processedUrls` | struct | Every URL the crawler visited (used to avoid re-visiting). |
-| `badUrls` | array | URLs that failed to fetch or returned a non-HTML / error response. |
-| `disallowedUrls` | array | URLs skipped because `robots.txt` disallowed them. |
-| `ignored` | array | Links the crawl dropped, each `{ url, reason }`. `reason` is `"nofollow"`, `"excluded"` (matched `excludeUrls` or `excludePattern`), or `"disallowed"` (blocked by `robots.txt`, so these also appear in `disallowedUrls`). |
+| `processedUrls` | array | Every URL the crawler visited (used to avoid re-visiting). |
+| `badUrls` | struct | URLs that failed to fetch or returned a non-HTML / error response, keyed by URL with a `{ message }` value. |
+| `ignored` | array | URLs the crawl dropped, each `{ url, reason }`. `reason` is `"nofollow"`, `"excluded"` (matched `excludeUrls` or `excludePattern`), `"disallowed"` (blocked by `robots.txt`), or `"notAllowed"` (a rejected seed that is off-host, the wrong scheme, or an asset URL). A rejected start/seed URL is reported here too. |
 | `redirects` | array | One entry per fetched URL that followed an HTTP redirect: `{ from, to, chain }`. `from` is the requested URL, `to` is the final URL, and `chain` is the hop list, each `{ url, status }`. |
 | `filePath` | string | The path passed as `filePath`, or empty when nothing was saved. |
 | `saved` | boolean | `true` when the sitemap was written to `filePath`. |
@@ -91,7 +90,8 @@ var result = getInstance( "SitemapService@sitemap-spider" ).create(
 Each entry in `pages` looks like:
 
 ```cfml
-"https://example.com/about/" = {
+{
+    url          : "https://example.com/about/",
     lastModified : "2026-07-01",  // date-only, or empty when unknown (see lastModFallback)
     priority     : 0.9,           // 1.0 at the start URL, reduced by depth
     depth        : 1,             // link distance from the start URL
@@ -113,7 +113,7 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `userAgent` | `"sitemap-spider"` | Sent on every fetch, and matched against `robots.txt` `User-agent` groups. |
 | `maxCrawlDelay` | `10` | Upper cap, in seconds, on the `robots.txt` `Crawl-delay` actually applied between fetches. A `Crawl-delay` no longer forces a single-threaded crawl: a parallel crawl still honors it by spacing fetches this far apart across the workers. |
 | `notAllowedPattern` | `\.(png\|webp\|svg\|gif\|js\|css\|jpg\|jpeg)$\|javascript:\|mailto:\|tel:` | Links matching this regex are never crawled (asset files and non-HTTP schemes). |
-| `excludePattern` | `""` (empty) | Regex matched case-insensitively against the full URL for whole-section excludes (e.g. `/admin/`). A match skips the URL and reports it in `ignored` with reason `"excluded"`. Separate from the per-crawl exact-URL `excludeUrls` argument. Empty means no pattern exclusion. |
+| `excludePattern` | `""` (empty) | Regex matched case-insensitively against the full URL for whole-section excludes (e.g. `/admin/`). A match skips the URL and reports it in `ignored` with reason `"excluded"`. Separate from the per-crawl exact-URL `excludeUrls` argument. Empty means no pattern exclusion. The `create()` `excludePattern` argument overrides this setting for a single crawl. |
 | `priority` | `1.0` | `<priority>` assigned to the start URL. |
 | `priorityDecrement` | `0.1` | How much `<priority>` drops per level of depth. |
 | `maxUrlsPerSitemap` | `50000` | sitemaps.org per-file URL limit. Above this the output splits into a sitemap index. |

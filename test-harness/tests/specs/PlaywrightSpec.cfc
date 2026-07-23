@@ -64,7 +64,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
                 title = "finds a link injected immediately by JavaScript (js-link.cfm)",
                 skip  = !variables.playwrightAvailable,
                 body  = function(){
-                    expect( variables.rootPages ).toHaveKey( variables.appRoot & "js-link.cfm" );
+                    expect( hasPage( variables.rootPages, variables.appRoot & "js-link.cfm" ) ).toBeTrue();
                 }
             );
 
@@ -73,7 +73,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
                 skip  = !variables.playwrightAvailable,
                 body  = function(){
                     // Only reachable because runCrawl sets waitMs above 3000.
-                    expect( variables.rootPages ).toHaveKey( variables.appRoot & "js-link-late.cfm" );
+                    expect( hasPage( variables.rootPages, variables.appRoot & "js-link-late.cfm" ) ).toBeTrue();
                 }
             );
 
@@ -83,7 +83,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
                 body  = function(){
                     // The blanket waitMs is 0 here; the crawl only reaches the late
                     // link because waitForSelector waited for it to be injected.
-                    expect( variables.selectorPages ).toHaveKey( variables.appRoot & "js-link-late.cfm" );
+                    expect( hasPage( variables.selectorPages, variables.appRoot & "js-link-late.cfm" ) ).toBeTrue();
                 }
             );
 
@@ -91,8 +91,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
                 title = "follows a JavaScript location.replace redirect to contact.cfm",
                 skip  = !variables.playwrightAvailable,
                 body  = function(){
-                    expect( variables.redirectPages ).toHaveKey( variables.appRoot & "contact.cfm" );
-                    expect( variables.redirectPages ).notToHaveKey( variables.appRoot & "js-redirect-old.cfm" );
+                    expect( hasPage( variables.redirectPages, variables.appRoot & "contact.cfm" ) ).toBeTrue();
+                    expect( hasPage( variables.redirectPages, variables.appRoot & "js-redirect-old.cfm" ) ).toBeFalse();
                 }
             );
 
@@ -100,6 +100,17 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
     }
 
     /*********************************** HELPERS ***********************************/
+
+    // The crawl result's pages is an array of page structs (each with a url
+    // field), not a struct keyed by URL, so this replaces the old toHaveKey idiom.
+    private boolean function hasPage( required array pages, required string url ){
+        for ( var page in arguments.pages ){
+            if ( page.url == arguments.url ){
+                return true;
+            }
+        }
+        return false;
+    }
 
     /**
      * Runs one crawl from a seed URL using the Playwright backend.
