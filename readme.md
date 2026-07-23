@@ -23,8 +23,8 @@ The only runtime dependency is `cbjavaloader`, which loads the bundled
 `lib/jsoup-1.21.2.jar` at module load. jsoup ships inside the package, so no
 extra download is needed for the default backend.
 
-> Note: the test suite has been validated on Adobe 2023. Runs on Lucee 5/6 and
-> BoxLang are pending — see the project tracker's deferred items.
+> Note: the full test suite (including the Playwright specs) passes on Adobe
+> 2023, Lucee 5, Lucee 6, and BoxLang 1.
 
 ## Install
 
