@@ -362,6 +362,73 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
+		describe( "hreflang and video sitemap extensions via create()", function(){
+
+			it( "records alternates and emits <xhtml:link> when includeHreflang is on", function(){
+				// index.cfm declares an "es" alternate on another host and an
+				// "x-default" pointing at itself. Both land on the page struct and
+				// in the XML, emitted exactly as declared. The setting is the
+				// shared module-settings struct, so it is restored in the finally.
+				var settings = getInstance( "coldbox:moduleSettings:sitemap-spider" );
+				var original = settings.includeHreflang;
+				try {
+					settings.includeHreflang = true;
+
+					var result = getInstance( "sitemapService@sitemap-spider" )
+						.create( variables.appRoot );
+
+					var alternates = pageFor( result.pages, variables.appRoot ).alternates;
+					expect( alternates ).toBeArray();
+					expect( alternates.len() ).toBe( 2 );
+					expect( alternates[ 1 ].hreflang ).toBe( "es" );
+					expect( alternates[ 1 ].href ).toBe( "https://es.example.test/" );
+					expect( alternates[ 2 ].hreflang ).toBe( "x-default" );
+
+					expect( result.sitemap ).toInclude( 'xmlns:xhtml="http://www.w3.org/1999/xhtml"' );
+					expect( result.sitemap ).toInclude(
+						'<xhtml:link rel="alternate" hreflang="es" href="https://es.example.test/"/>'
+					);
+				} finally {
+					settings.includeHreflang = original;
+				}
+			} );
+
+			it( "records videos and emits <video:video> when includeVideos is on", function(){
+				// index.cfm carries a <video src="./assets/video/sample.mp4"
+				// poster="./assets/img/sample.jpg">. The title comes from the page
+				// <title> and the description from the meta description tag.
+				var settings = getInstance( "coldbox:moduleSettings:sitemap-spider" );
+				var original = settings.includeVideos;
+				try {
+					settings.includeVideos = true;
+
+					var result = getInstance( "sitemapService@sitemap-spider" )
+						.create( variables.appRoot );
+
+					var videos = pageFor( result.pages, variables.appRoot ).videos;
+					expect( videos ).toBeArray();
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].contentLoc ).toBe( variables.appRoot & "assets/video/sample.mp4" );
+					expect( videos[ 1 ].thumbnailLoc ).toBe( variables.appRoot & "assets/img/sample.jpg" );
+					expect( videos[ 1 ].title ).toBe( "Home" );
+					expect( videos[ 1 ].description ).toBe( "Sample home page with a video." );
+
+					expect( result.sitemap ).toInclude( 'xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"' );
+					expect( result.sitemap ).toInclude(
+						"<video:video>"
+						& "<video:thumbnail_loc>" & variables.appRoot & "assets/img/sample.jpg</video:thumbnail_loc>"
+						& "<video:title>Home</video:title>"
+						& "<video:description>Sample home page with a video.</video:description>"
+						& "<video:content_loc>" & variables.appRoot & "assets/video/sample.mp4</video:content_loc>"
+						& "</video:video>"
+					);
+				} finally {
+					settings.includeVideos = original;
+				}
+			} );
+
+		} );
+
 		describe( "async parallel crawl", function(){
 
 			// The shared beforeAll crawl (variables.result) is synchronous. Crawl

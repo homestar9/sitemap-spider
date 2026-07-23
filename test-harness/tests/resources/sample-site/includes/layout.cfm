@@ -2,6 +2,9 @@
 param pageTitle = "Untitled Page";
 param canonicalUrl = "";
 param baseHref = request.baseHref;
+// Extra tags a page wants in its <head> (e.g. index.cfm's hreflang links for
+// the task 24 extension tests). Empty for pages that set nothing.
+param extraHead = "";
 </cfscript>
 <cfoutput>
 
@@ -16,6 +19,9 @@ param baseHref = request.baseHref;
         </cfif>
         <cfif len( canonicalUrl )>
             <link rel="canonical" href="#canonicalUrl#">
+        </cfif>
+        <cfif len( extraHead )>
+            #extraHead#
         </cfif>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     </head>

@@ -8,6 +8,11 @@
              src resolves against the page URL to an absolute image URL. -->
         <img src="./assets/img/sample.jpg" alt="Sample image" />
 
+        <!-- INTENTIONAL: video for the video-sitemap test (task 24). The mp4
+             does not exist on disk; the crawler never fetches it. Title and
+             description come from the page <title> and meta description. -->
+        <video src="./assets/video/sample.mp4" poster="./assets/img/sample.jpg"></video>
+
         <!--- INTENTIONAL: External url --->
         <a href="https://www.angrysam.com">Angry Sam Productions</a><br />
         <!-- INTENTIONAL TRICK: absolute http link (should be detected as duplicate from nav) -->
