@@ -34,10 +34,11 @@ component
      *   for the <sitemapindex> <loc> entries (only relevant when splitting). When
      *   empty, it is derived from the first start URL's directory.
      * @runAsync When true, crawl URLs on several worker threads. Defaults to the
-     *   module's runAsync setting. The crawler only honors it when there is no
-     *   robots Crawl-delay and the browser backend is parallel-safe; otherwise the
-     *   crawl runs single-threaded. The returned struct's runAsync key reports
-     *   whether the crawl actually ran in parallel.
+     *   module's runAsync setting. The crawler honors it when the browser backend
+     *   is parallel-safe; otherwise the crawl runs single-threaded. A robots
+     *   Crawl-delay no longer forces sync — the delay is applied as a shared
+     *   per-fetch spacing across the workers. The returned struct's runAsync key
+     *   reports whether the crawl actually ran in parallel.
      * @return A struct containing the crawled pages, sitemap XML, and duration
      */
     struct function create(

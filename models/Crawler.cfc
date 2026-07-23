@@ -75,9 +75,10 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @urls An array of URLs to start crawling
      * @excludeUrls An array of URLs to exclude from crawling
      * @runAsync When true, fetch URLs on several worker threads instead of one.
-     *           Only honored when the crawl has no robots Crawl-delay and the
-     *           browser backend reports supportsParallel(); otherwise the crawl
-     *           runs single-threaded (a downgrade is logged).
+     *           Only honored when the browser backend reports supportsParallel();
+     *           otherwise the crawl runs single-threaded (a downgrade is logged).
+     *           A robots Crawl-delay no longer forces sync: the delay is applied
+     *           as a shared per-fetch spacing across the workers (applyCrawlDelay).
      * @return A struct with the crawled pages, bad URLs, and processed URLs.
      *         processedUrls is returned as an array (its map keys) even though it
      *         is tracked internally as a set, so callers keep a simple list
@@ -118,19 +119,14 @@ component accessors=true hint="Handles crawling of website URLs" {
             variables.excludedUrls[ parser.cleanUrl( excluded ) ] = true;
         }
 
-        // Decide whether this crawl runs in parallel. Async is honored only when
-        // the caller asked for it AND there is no robots Crawl-delay to respect
-        // (parallel fetching and a politeness delay are contradictory) AND the
-        // browser backend is thread-safe. When any of those fails, run sync.
-        variables.async = arguments.runAsync
-            && variables.effectiveCrawlDelay == 0
-            && browser.supportsParallel();
+        // Decide whether this crawl runs in parallel. Async is honored when the
+        // caller asked for it AND the browser backend is thread-safe. A robots
+        // Crawl-delay no longer forces sync: applyCrawlDelay() spaces the fetches
+        // across the workers so the politeness gap is still honored in parallel.
+        variables.async = arguments.runAsync && browser.supportsParallel();
 
         if ( arguments.runAsync && !variables.async ) {
-            logger.info(
-                "runAsync requested but running single-threaded: "
-                & ( variables.effectiveCrawlDelay > 0 ? "a robots Crawl-delay is in effect" : "the browser backend is not parallel-safe" )
-            );
+            logger.info( "runAsync requested but running single-threaded: the browser backend is not parallel-safe" );
         }
 
         // In async mode, replace the CFML struct/array state with thread-safe
@@ -341,13 +337,11 @@ component accessors=true hint="Handles crawling of website URLs" {
 
         logger.info( "Crawling #normalizedUrl# at depth #arguments.depth#" );
 
-        // Honor the robots.txt Crawl-delay: wait between fetches, but not before
-        // the first one. Applied here (right before the fetch) rather than per
-        // loop iteration, so items that return early above do not trigger a wait.
-        if ( variables.effectiveCrawlDelay > 0 && variables.hasFetched ) {
-            sleep( variables.effectiveCrawlDelay * 1000 );
-        }
-        variables.hasFetched = true;
+        // Honor the robots.txt Crawl-delay right before the fetch. In sync mode
+        // this sleeps between fetches; in async mode each worker claims a spaced
+        // fetch slot so parallel crawling still respects the politeness gap.
+        // Applied here (after the early-return guards) so skipped items never wait.
+        applyCrawlDelay();
 
         // Fetch the url.
         try {
@@ -735,6 +729,54 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.ignoredUrls   = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.pending       = createObject( "java", "java.util.concurrent.atomic.AtomicInteger" ).init( javaCast( "int", 0 ) );
         variables.pageCount     = createObject( "java", "java.util.concurrent.atomic.AtomicInteger" ).init( javaCast( "int", 0 ) );
+        // Shared next-allowed-fetch timestamp (getTickCount millis) that spaces
+        // parallel fetches when a robots Crawl-delay applies. See applyCrawlDelay.
+        variables.nextAllowedFetch = createObject( "java", "java.util.concurrent.atomic.AtomicLong" ).init( javaCast( "long", 0 ) );
+    }
+
+    /**
+     * Waits before a fetch to honor the robots.txt Crawl-delay, if any.
+     * @return nothing; the wait is the side effect.
+     *
+     * Does nothing when effectiveCrawlDelay is 0 (no delay, or respectRobotsTxt
+     * is off).
+     *
+     * Sync mode: sleeps the delay between fetches, but not before the first one
+     * (the hasFetched guard).
+     *
+     * Async mode: several workers fetch at once, so a plain per-thread sleep would
+     * not space the fetches apart. Instead each worker atomically claims the next
+     * fetch slot on the shared nextAllowedFetch timestamp: it reads the current
+     * slot, takes the later of that slot and now, then advances the slot by delayMs
+     * with a compareAndSet. The worker that wins the compareAndSet owns that slot
+     * and waits until it. This spaces the real fetches delayMs apart across all
+     * workers while their parse and queue work still overlaps. The first fetch goes
+     * out immediately (the slot starts at 0, so its target is now).
+     */
+    private void function applyCrawlDelay() {
+        if ( variables.effectiveCrawlDelay == 0 ) {
+            return;
+        }
+        var delayMs = variables.effectiveCrawlDelay * 1000;
+
+        if ( variables.async ) {
+            var now = getTickCount();
+            while ( true ) {
+                var cur    = variables.nextAllowedFetch.get();
+                var target = max( cur, now );
+                if ( variables.nextAllowedFetch.compareAndSet( javaCast( "long", cur ), javaCast( "long", target + delayMs ) ) ) {
+                    if ( target - now > 0 ) {
+                        sleep( target - now );
+                    }
+                    return;
+                }
+            }
+        }
+
+        if ( variables.hasFetched ) {
+            sleep( delayMs );
+        }
+        variables.hasFetched = true;
     }
 
     /**

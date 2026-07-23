@@ -353,19 +353,24 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				expect( result.pages ).notToHaveKey( badUrl );
 			} );
 
-			it( "runs synchronously when robots.txt sets a Crawl-delay, even with runAsync=true", function(){
-				// maxCrawlDelay is overridden above 0 so the robots Crawl-delay is
-				// actually applied (the test harness pins it to 0 otherwise).
-				var ctx = buildCrawler( { maxCrawlDelay : 10 } );
-				ctx.fake.setRobots( "User-agent: *" & chr( 10 ) & "Crawl-delay: 5" );
-				ctx.fake.addPage( variables.root, "" );
+			it( "still runs in parallel when robots.txt sets a Crawl-delay, spacing the fetches", function(){
+				// A Crawl-delay no longer forces sync: the crawl runs in parallel
+				// and applyCrawlDelay spaces the fetches across the workers. Use a
+				// tiny delay (maxCrawlDelay caps it) and a small graph so the test
+				// stays fast while still exercising the spaced-slot path.
+				var ctx = buildCrawler( { maxCrawlDelay : 1 } );
+				ctx.fake.setRobots( "User-agent: *" & chr( 10 ) & "Crawl-delay: 1" );
+				var linked = [];
+				for ( var i = 1; i <= 3; i++ ){
+					linked.append( variables.root & "p#i#.cfm" );
+				}
+				wireGraph( ctx.fake, linked );
 
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
 
-				// A Crawl-delay forces single-threaded so the delay is honored
-				// between fetches; parallel fetching would defeat it.
-				expect( result.runAsync ).toBeFalse();
-				expect( result.pages ).toHaveKey( variables.root );
+				expect( result.runAsync ).toBeTrue();
+				// root + p1..p3 = 4 pages, all recorded despite the delay spacing.
+				expect( structCount( result.pages ) ).toBe( 4 );
 			} );
 
 		} );
