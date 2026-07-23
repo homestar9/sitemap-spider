@@ -108,6 +108,212 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
+     * Extracts hreflang alternate-language links from a page for the sitemap's
+     * <xhtml:link> entries.
+     * @page The jSoup document. It must have been parsed with a base URI (see
+     *   parseHtml) or carry a <base href> tag, so a relative href resolves to an
+     *   absolute URL via attr( "abs:href" ).
+     *
+     * Returns an array of { hreflang, href } structs, one per
+     * <link rel="alternate" hreflang="..." href="..."> tag. The href is emitted
+     * exactly as the page declared it (after resolving a relative value): no
+     * cleanUrl() normalization, no host filter, no check that the target was
+     * crawled. hreflang points at other-language versions of the page, which
+     * usually live on other hosts, so filtering would defeat the feature. The
+     * hreflang value is trimmed but never validated, so "x-default" passes.
+     *
+     * Tags with an empty hreflang or an empty href are skipped. Exact duplicate
+     * hreflang+href pairs are dropped, and the list is capped at 1000 as a
+     * defensive limit (same cap as getImages).
+     */
+    array function getAlternateLinks( required any page ) {
+        var alternates = [ ];
+        var seen       = { };
+        arguments.page.select( "link[rel=alternate][hreflang]" ).each( function( link ) {
+            var hreflang = trim( arguments.link.attr( "hreflang" ) );
+            // Check the raw href first: jsoup resolves an empty href="" against
+            // the base URI to the page URL, so abs:href would look non-empty.
+            var rawHref = trim( arguments.link.attr( "href" ) );
+            if ( !len( hreflang ) || !len( rawHref ) ) {
+                return;
+            }
+            var href = trim( arguments.link.attr( "abs:href" ) );
+            if ( !len( href ) ) {
+                return; // could not resolve to an absolute URL
+            }
+            var pairKey = hreflang & "|" & href;
+            if ( seen.keyExists( pairKey ) || alternates.len() >= 1000 ) {
+                return; // duplicate pair on this page, or past the defensive cap
+            }
+            seen[ pairKey ] = true;
+            alternates.append( { "hreflang": hreflang, "href": href } );
+        } );
+        return alternates;
+    }
+
+    /**
+     * Extracts video metadata from a page for the sitemap's <video:video>
+     * blocks.
+     * @page The jSoup document. It must have been parsed with a base URI (see
+     *   parseHtml) or carry a <base href> tag, so relative URLs resolve.
+     *
+     * Returns an array of structs, each with all five keys:
+     *   { title, description, thumbnailLoc, contentLoc, playerLoc }
+     *
+     * Two sources are read, in order:
+     *   1. Open Graph meta tags (at most one video per page). The player URL is
+     *      the first non-empty of og:video:secure_url, og:video:url, og:video,
+     *      and becomes playerLoc — OG video URLs are embed/player pages, and
+     *      Google requires content_loc to be an actual media file.
+     *   2. <video> elements, in document order. The media URL comes from the
+     *      src attribute, or the first <source src> child when src is absent,
+     *      and becomes contentLoc. The poster attribute is the thumbnail.
+     *
+     * Required text fields fall back to page-level values: og:title then
+     * <title> for the title, og:description then <meta name=description> for
+     * the description, og:image for a missing thumbnail.
+     *
+     * Google requires a thumbnail, title, description, and a content or player
+     * URL per video. A candidate still missing any of those after the fallbacks
+     * is dropped silently — the SitemapGenerator never validates. Duplicates
+     * (same media/player URL, e.g. OG tags and a <video> tag pointing at the
+     * same file) are emitted once, first occurrence wins. Capped at 100 videos
+     * per page as a defensive limit.
+     */
+    array function getVideos( required any page ) {
+        var baseUri = arguments.page.baseUri();
+
+        // Page-level fallbacks, computed once. Title falls back from og:title
+        // to the <title> tag; description from og:description to
+        // <meta name=description>; the thumbnail fallback is og:image.
+        var pageTitle = metaContent( arguments.page, "meta[property=og:title]" );
+        if ( !len( pageTitle ) ) {
+            pageTitle = trim( arguments.page.title() );
+        }
+        var pageDescription = metaContent( arguments.page, "meta[property=og:description]" );
+        if ( !len( pageDescription ) ) {
+            pageDescription = metaContent( arguments.page, "meta[name=description]" );
+        }
+        var pageThumbnail = resolveAgainstBase( metaContent( arguments.page, "meta[property=og:image]" ), baseUri );
+
+        // Candidates are collected first, then validated/deduped below, so the
+        // append logic lives in one place.
+        var candidates = [ ];
+
+        // Source 1: Open Graph. secure_url is preferred per the OG spec's own
+        // ordering; plain og:video is the common shorthand.
+        var ogUrl = metaContent( arguments.page, "meta[property=og:video:secure_url]" );
+        if ( !len( ogUrl ) ) {
+            ogUrl = metaContent( arguments.page, "meta[property=og:video:url]" );
+        }
+        if ( !len( ogUrl ) ) {
+            ogUrl = metaContent( arguments.page, "meta[property=og:video]" );
+        }
+        ogUrl = resolveAgainstBase( ogUrl, baseUri );
+        if ( len( ogUrl ) ) {
+            candidates.append( {
+                "title": pageTitle,
+                "description": pageDescription,
+                "thumbnailLoc": pageThumbnail,
+                "contentLoc": "",
+                "playerLoc": ogUrl
+            } );
+        }
+
+        // Source 2: <video> elements. HTML has no per-element title or
+        // description, so those always come from the page-level fallbacks.
+        for ( var element in arguments.page.select( "video" ) ) {
+            // The media file: the element's own src, else its first
+            // <source src> child. Raw attributes are checked before abs: ones
+            // because jsoup resolves an empty src="" to the page URL.
+            var contentLoc = "";
+            if ( len( trim( element.attr( "src" ) ) ) ) {
+                contentLoc = trim( element.attr( "abs:src" ) );
+            } else {
+                var sources = element.select( "source[src]" );
+                for ( var source in sources ) {
+                    if ( len( trim( source.attr( "src" ) ) ) ) {
+                        contentLoc = trim( source.attr( "abs:src" ) );
+                        break;
+                    }
+                }
+            }
+            var thumbnail = len( trim( element.attr( "poster" ) ) )
+                ? trim( element.attr( "abs:poster" ) )
+                : pageThumbnail;
+            candidates.append( {
+                "title": pageTitle,
+                "description": pageDescription,
+                "thumbnailLoc": thumbnail,
+                "contentLoc": contentLoc,
+                "playerLoc": ""
+            } );
+        }
+
+        // Validate, dedupe, and cap. Dedupe is keyed on the media/player URL so
+        // an OG tag and a <video> tag pointing at the same file emit once (the
+        // OG entry wins because it was collected first).
+        var videos = [ ];
+        var seen   = { };
+        for ( var candidate in candidates ) {
+            var primaryUrl = len( candidate.contentLoc ) ? candidate.contentLoc : candidate.playerLoc;
+            if (
+                !len( primaryUrl )
+                || !len( candidate.thumbnailLoc )
+                || !len( candidate.title )
+                || !len( candidate.description )
+            ) {
+                logger.debug( "Dropping incomplete video candidate on #baseUri#" );
+                continue;
+            }
+            if ( seen.keyExists( primaryUrl ) || videos.len() >= 100 ) {
+                continue; // duplicate on this page, or past the defensive cap
+            }
+            seen[ primaryUrl ] = true;
+            videos.append( candidate );
+        }
+        return videos;
+    }
+
+    /**
+     * Returns the trimmed content attribute of the first element matching the
+     * selector, or "" when the page has no match.
+     */
+    private string function metaContent( required any page, required string selector ) {
+        var found = arguments.page.select( arguments.selector );
+        if ( !found.size() ) {
+            return "";
+        }
+        return trim( found.first().attr( "content" ) );
+    }
+
+    /**
+     * Resolves a possibly-relative URL string against a base URL and returns
+     * the absolute form, or "" when it cannot be resolved.
+     *
+     * Needed because jsoup's "abs:" attribute prefix only resolves real URL
+     * attributes (href, src, poster), not a URL held in a meta tag's content
+     * attribute. Uses java.net.URL's two-argument constructor; an
+     * already-absolute value is returned unchanged (the constructor ignores the
+     * base then). With an empty base, only an already-absolute value survives.
+     */
+    private string function resolveAgainstBase( required string raw, required string baseUrl ) {
+        var target = trim( arguments.raw );
+        if ( !len( target ) ) {
+            return "";
+        }
+        try {
+            if ( !len( arguments.baseUrl ) ) {
+                return createObject( "java", "java.net.URL" ).init( javaCast( "string", target ) ).toString();
+            }
+            var base = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.baseUrl ) );
+            return createObject( "java", "java.net.URL" ).init( base, javaCast( "string", target ) ).toString();
+        } catch ( any e ) {
+            return "";
+        }
+    }
+
+    /**
      * Gets the last modified date from a fetch result as a real date object.
      * @fetchResult The fetch result containing headers and body.
      * @parsedPage The jSoup document for the page (optional). When present, its
@@ -328,11 +534,10 @@ component accessors=true hint="Parses HTML content to extract links and metadata
      * redirect here. A tag with no "url=" part (e.g. content="5") just reloads the
      * same page, so this returns "".
      *
-     * The target is resolved against baseUrl with java.net.URL's two-argument
-     * constructor. This manual resolution is required because jSoup's "abs:"
-     * attribute prefix only resolves href/src attributes, not a URL parsed out of
-     * the "content" attribute's string value. An already-absolute target is
-     * returned unchanged (the two-arg constructor ignores the base then).
+     * The target is resolved against baseUrl by resolveAgainstBase, because
+     * jSoup's "abs:" attribute prefix only resolves href/src attributes, not a
+     * URL parsed out of the "content" attribute's string value. An
+     * already-absolute target is returned unchanged.
      */
     string function getMetaRefreshUrl( required any parsedPage, required string baseUrl ) {
         var meta = arguments.parsedPage.select( "meta[http-equiv=refresh]" );
@@ -349,14 +554,12 @@ component accessors=true hint="Parses HTML content to extract links and metadata
         if ( !len( rawTarget ) ) {
             return "";
         }
-        try {
-            var base = createObject( "java", "java.net.URL" ).init( javaCast( "string", arguments.baseUrl ) );
-            var absolute = createObject( "java", "java.net.URL" ).init( base, javaCast( "string", rawTarget ) ).toString();
-            return cleanUrl( absolute );
-        } catch ( any e ) {
-            logger.warn( "Could not resolve meta-refresh target '#rawTarget#' against '#arguments.baseUrl#': #e.message#" );
+        var absolute = resolveAgainstBase( rawTarget, arguments.baseUrl );
+        if ( !len( absolute ) ) {
+            logger.warn( "Could not resolve meta-refresh target '#rawTarget#' against '#arguments.baseUrl#'" );
             return "";
         }
+        return cleanUrl( absolute );
     }
 
     /**

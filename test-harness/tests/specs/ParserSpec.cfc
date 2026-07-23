@@ -408,6 +408,241 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				} );
 
+			describe( "getAlternateLinks()", function(){
+
+				it( "returns a struct per alternate with hreflang and href", function(){
+					var page = parseWithBase(
+						'<link rel="alternate" hreflang="es" href="https://es.example.test/">'
+						& '<link rel="alternate" hreflang="fr" href="https://fr.example.test/">',
+						"http://example.test/"
+					);
+					var alternates = variables.parser.getAlternateLinks( page );
+					expect( alternates.len() ).toBe( 2 );
+					expect( alternates[ 1 ].hreflang ).toBe( "es" );
+					expect( alternates[ 1 ].href ).toBe( "https://es.example.test/" );
+					expect( alternates[ 2 ].hreflang ).toBe( "fr" );
+					expect( alternates[ 2 ].href ).toBe( "https://fr.example.test/" );
+				} );
+
+				it( "resolves a relative alternate href against the base URI", function(){
+					var page = parseWithBase(
+						'<link rel="alternate" hreflang="es" href="es/page.cfm">',
+						"http://example.test/dir/"
+					);
+					var alternates = variables.parser.getAlternateLinks( page );
+					expect( alternates[ 1 ].href ).toBe( "http://example.test/dir/es/page.cfm" );
+				} );
+
+				it( "keeps off-host alternates verbatim", function(){
+					// hreflang points at other-language versions, which usually live
+					// on other hosts, so alternates are never host-filtered.
+					var page = parseWithBase(
+						'<link rel="alternate" hreflang="de" href="https://example.de/seite.cfm?a=1&b=2">',
+						"http://example.test/"
+					);
+					var alternates = variables.parser.getAlternateLinks( page );
+					expect( alternates.len() ).toBe( 1 );
+					expect( alternates[ 1 ].href ).toBe( "https://example.de/seite.cfm?a=1&b=2" );
+				} );
+
+				it( "allows the x-default hreflang value", function(){
+					var page = parseWithBase(
+						'<link rel="alternate" hreflang="x-default" href="https://example.test/">',
+						"http://example.test/"
+					);
+					var alternates = variables.parser.getAlternateLinks( page );
+					expect( alternates.len() ).toBe( 1 );
+					expect( alternates[ 1 ].hreflang ).toBe( "x-default" );
+				} );
+
+				it( "skips an alternate with a missing hreflang or empty href", function(){
+					var page = parseWithBase(
+						'<link rel="alternate" href="https://example.test/no-lang.cfm">'
+						& '<link rel="alternate" hreflang="" href="https://example.test/empty-lang.cfm">'
+						& '<link rel="alternate" hreflang="es" href="">'
+						& '<link rel="alternate" hreflang="fr" href="https://fr.example.test/">',
+						"http://example.test/"
+					);
+					var alternates = variables.parser.getAlternateLinks( page );
+					expect( alternates.len() ).toBe( 1 );
+					expect( alternates[ 1 ].hreflang ).toBe( "fr" );
+				} );
+
+				it( "returns an exact duplicate alternate only once", function(){
+					var page = parseWithBase(
+						'<link rel="alternate" hreflang="es" href="https://es.example.test/">'
+						& '<link rel="alternate" hreflang="es" href="https://es.example.test/">',
+						"http://example.test/"
+					);
+					expect( variables.parser.getAlternateLinks( page ).len() ).toBe( 1 );
+				} );
+
+			} );
+
+			describe( "getVideos()", function(){
+
+				it( "builds a player_loc video from og:video with og:title, og:description, og:image", function(){
+					var page = parseWithBase(
+						'<html><head>'
+						& '<meta property="og:video" content="https://player.other/embed/123">'
+						& '<meta property="og:title" content="My Video Page">'
+						& '<meta property="og:description" content="A page about a video.">'
+						& '<meta property="og:image" content="https://example.test/thumb.jpg">'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].playerLoc ).toBe( "https://player.other/embed/123" );
+					expect( videos[ 1 ].contentLoc ).toBe( "" );
+					expect( videos[ 1 ].title ).toBe( "My Video Page" );
+					expect( videos[ 1 ].description ).toBe( "A page about a video." );
+					expect( videos[ 1 ].thumbnailLoc ).toBe( "https://example.test/thumb.jpg" );
+				} );
+
+				it( "prefers og:video:secure_url over og:video:url and og:video", function(){
+					var page = parseWithBase(
+						'<html><head>'
+						& '<meta property="og:video" content="http://player.other/plain">'
+						& '<meta property="og:video:url" content="http://player.other/url">'
+						& '<meta property="og:video:secure_url" content="https://player.other/secure">'
+						& '<meta property="og:title" content="T">'
+						& '<meta property="og:description" content="D">'
+						& '<meta property="og:image" content="https://example.test/thumb.jpg">'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].playerLoc ).toBe( "https://player.other/secure" );
+				} );
+
+				it( "builds a content_loc video from a video tag src with poster thumbnail", function(){
+					var page = parseWithBase(
+						'<html><head><title>Page Title</title>'
+						& '<meta name="description" content="Page description.">'
+						& '</head><body>'
+						& '<video src="clip.mp4" poster="poster.jpg"></video>'
+						& '</body></html>',
+						"http://example.test/dir/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].contentLoc ).toBe( "http://example.test/dir/clip.mp4" );
+					expect( videos[ 1 ].playerLoc ).toBe( "" );
+					expect( videos[ 1 ].thumbnailLoc ).toBe( "http://example.test/dir/poster.jpg" );
+					expect( videos[ 1 ].title ).toBe( "Page Title" );
+					expect( videos[ 1 ].description ).toBe( "Page description." );
+				} );
+
+				it( "reads the URL from a nested source child when the video tag has no src", function(){
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<meta name="description" content="D">'
+						& '</head><body>'
+						& '<video poster="poster.jpg"><source src="clip.webm" type="video/webm"><source src="clip.mp4"></video>'
+						& '</body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].contentLoc ).toBe( "http://example.test/clip.webm" );
+				} );
+
+				it( "falls back to the page title and meta description for required text fields", function(){
+					// No og:title / og:description: the <title> tag and
+					// <meta name=description> fill the required fields.
+					var page = parseWithBase(
+						'<html><head><title>Fallback Title</title>'
+						& '<meta name="description" content="Fallback description.">'
+						& '<meta property="og:video" content="https://player.other/embed/9">'
+						& '<meta property="og:image" content="https://example.test/thumb.jpg">'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].title ).toBe( "Fallback Title" );
+					expect( videos[ 1 ].description ).toBe( "Fallback description." );
+				} );
+
+				it( "falls back to og:image when a video tag has no poster", function(){
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<meta name="description" content="D">'
+						& '<meta property="og:image" content="https://example.test/og-thumb.jpg">'
+						& '</head><body>'
+						& '<video src="clip.mp4"></video>'
+						& '</body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].thumbnailLoc ).toBe( "https://example.test/og-thumb.jpg" );
+				} );
+
+				it( "drops a video missing a thumbnail after fallbacks", function(){
+					// No poster and no og:image: the thumbnail is required, so the
+					// video is dropped.
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<meta name="description" content="D">'
+						& '</head><body>'
+						& '<video src="clip.mp4"></video>'
+						& '</body></html>',
+						"http://example.test/"
+					);
+					expect( variables.parser.getVideos( page ).len() ).toBe( 0 );
+				} );
+
+				it( "drops a video element with no src and no source child", function(){
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<meta name="description" content="D">'
+						& '<meta property="og:image" content="https://example.test/thumb.jpg">'
+						& '</head><body>'
+						& '<video poster="poster.jpg"></video>'
+						& '</body></html>',
+						"http://example.test/"
+					);
+					expect( variables.parser.getVideos( page ).len() ).toBe( 0 );
+				} );
+
+				it( "returns a video declared via both og:video and a video tag only once", function(){
+					// Both sources point at the same file, so only the OG entry
+					// (collected first) survives the URL dedupe.
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<meta name="description" content="D">'
+						& '<meta property="og:video" content="http://example.test/same.mp4">'
+						& '<meta property="og:image" content="https://example.test/thumb.jpg">'
+						& '</head><body>'
+						& '<video src="same.mp4" poster="poster.jpg"></video>'
+						& '</body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].playerLoc ).toBe( "http://example.test/same.mp4" );
+					expect( videos[ 1 ].contentLoc ).toBe( "" );
+				} );
+
+				it( "resolves relative video src and poster against the base URI", function(){
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<meta name="description" content="D">'
+						& '</head><body>'
+						& '<video src="media/clip.mp4" poster="media/poster.jpg"></video>'
+						& '</body></html>',
+						"http://example.test/sub/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos[ 1 ].contentLoc ).toBe( "http://example.test/sub/media/clip.mp4" );
+					expect( videos[ 1 ].thumbnailLoc ).toBe( "http://example.test/sub/media/poster.jpg" );
+				} );
+
+			} );
+
 			describe( "getMetaRefreshUrl()", function(){
 
 				it( "resolves a relative target against the base URL", function(){
