@@ -24,6 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<urlset>` gains the image namespace. Images are not host-filtered (CDN images
   are kept), and each page's `images` array is included in the crawl result.
   Defaults to `false` (no image entries, output unchanged).
+- `includeHreflang` module setting: when `true`, each crawled page's
+  `<link rel="alternate" hreflang="...">` tags are collected and emitted as
+  `<xhtml:link>` entries, and the `<urlset>` gains the xhtml namespace.
+  Alternates are emitted exactly as the page declared them — off-host targets
+  are kept and `x-default` is allowed — and each page's `alternates` array is
+  included in the crawl result. Defaults to `false` (output unchanged).
+- `includeVideos` module setting: when `true`, each crawled page's videos are
+  collected and emitted as `<video:video>` blocks, and the `<urlset>` gains the
+  video namespace. Videos are read from Open Graph tags (`og:video` becomes
+  `<video:player_loc>`) and `<video>` elements (`src` or a `<source src>` child
+  becomes `<video:content_loc>`, `poster` the thumbnail), with the page title,
+  meta description, and `og:image` as fallbacks for the required fields. A video
+  still missing a required field is dropped. Each page's `videos` array is
+  included in the crawl result. Defaults to `false` (output unchanged).
 - `seedUrls` argument on `SitemapService.create()`: an array of extra start URLs
   for orphan pages that no reachable page links to. They are crawled alongside
   `url`; the host, `robots.txt` base, and split-file base URL still come from the

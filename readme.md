@@ -95,7 +95,9 @@ Each entry in `pages` looks like:
     lastModified : "2026-07-01",  // date-only, or empty when unknown (see lastModFallback)
     priority     : 0.9,           // 1.0 at the start URL, reduced by depth
     depth        : 1,             // link distance from the start URL
-    images       : []             // page image URLs, filled only when includeImages is on
+    images       : [],            // page image URLs, filled only when includeImages is on
+    alternates   : [],            // { hreflang, href } structs, filled only when includeHreflang is on
+    videos       : []             // video structs, filled only when includeVideos is on
 }
 ```
 
@@ -121,6 +123,8 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `gzipOutput` | `false` | When true and a `filePath` is given, the sitemap files are written gzip-compressed with a `.gz` suffix (e.g. `sitemap.xml.gz`). Child files and the `<sitemapindex>` `<loc>` entries carry `.gz` too. See the note below on serving `.gz`. |
 | `lastModFormat` | `"date"` | Format of `<lastmod>`: `"date"` writes the date-only form (`YYYY-MM-DD`); `"datetime"` writes the full W3C timestamp (`YYYY-MM-DDThh:mm:ss+HH:MM`) in the server's local timezone. |
 | `includeImages` | `false` | When true, each page's `<img src>` images are emitted as `<image:image>` entries and the `<urlset>` gains the image namespace. Images are not host-filtered (CDN images are kept), capped at 1000 per page. |
+| `includeHreflang` | `false` | When true, each page's `<link rel="alternate" hreflang="...">` tags are emitted as `<xhtml:link>` entries and the `<urlset>` gains the xhtml namespace. Alternates are emitted exactly as declared — off-host targets are kept (hreflang usually points at other domains) and `x-default` is allowed. Capped at 1000 per page. |
+| `includeVideos` | `false` | When true, each page's videos are emitted as `<video:video>` blocks and the `<urlset>` gains the video namespace. Videos are read from Open Graph tags (`og:video` becomes `<video:player_loc>`) and `<video>` elements (`src` or a `<source src>` child becomes `<video:content_loc>`, `poster` the thumbnail). The title and description fall back to `og:title`/`<title>` and `og:description`/meta description; the thumbnail falls back to `og:image`. A video still missing a required field (thumbnail, title, description, or a URL) is dropped. Capped at 100 per page. |
 | `lastModFallback` | `"omit"` | What `<lastmod>` does when a page has no parseable Last-Modified: `"omit"` leaves it out; `"crawlTime"` records the crawl timestamp. |
 | `requestTimeout` | `10000` | Per-request timeout in milliseconds. |
 | `maxBodySize` | `5242880` | Cap (bytes) on the response body a fetch downloads (5 MB). |
@@ -218,6 +222,14 @@ sees links and content that JavaScript adds after load. It needs some setup:
   page from its `<img src>` tags, plus the
   `xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"` namespace on
   the `<urlset>`.
+- **hreflang alternates** (`includeHreflang = true`) add an `<xhtml:link
+  rel="alternate" hreflang="..." href="..."/>` per declared alternate on each
+  `<url>`, plus the `xmlns:xhtml="http://www.w3.org/1999/xhtml"` namespace on
+  the `<urlset>`.
+- **Video sitemaps** (`includeVideos = true`) add `<video:video>` blocks per
+  page (thumbnail, title, description, then a content and/or player URL), plus
+  the `xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"` namespace
+  on the `<urlset>`.
 
 ## Releasing (maintainers)
 
