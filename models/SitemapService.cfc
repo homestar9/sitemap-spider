@@ -20,6 +20,10 @@ component
      * Creates a sitemap starting from one or more URLs
      *
      * @url A single URL (string) or array of URLs to start crawling
+     * @seedUrls Optional extra start URLs for pages not linked from `url` (orphan
+     *   pages). They are added to the crawl frontier alongside `url`. All seeds
+     *   must share the host of `url`: the host, robots.txt base, and split-file
+     *   base URL are all taken from the first `url`, not from seedUrls.
      * @excludeUrls Array of URLs to exclude from crawling
      * @filePath Optional full path to save the sitemap XML to. When set, the XML
      *   is written there (creating the directory if needed) and the return struct
@@ -38,6 +42,7 @@ component
      */
     struct function create(
         required any url, // String or array of strings
+        array seedUrls = [], // Extra start URLs for orphan pages not linked from url
         array excludeUrls = [], // Array of URLs to exclude from crawling
         string filePath = "", // Optional file path to save the sitemap XML to
         string publicBaseUrl = "", // Absolute URL prefix for <sitemapindex> entries
@@ -51,9 +56,17 @@ component
         // Normalize url to an array
         var urlArray = isArray( arguments.url ) ? arguments.url : [ arguments.url ];
 
+        // The crawl frontier is seeded from url plus any extra seedUrls. urlArray[1]
+        // stays the primary (host, robots base, split-file base URL); seedUrls only
+        // add more entry points so orphan pages can be reached. Built as a fresh
+        // array so a caller who passed url as an array is not mutated.
+        var crawlSeeds = [];
+        crawlSeeds.append( urlArray, true );
+        crawlSeeds.append( arguments.seedUrls, true );
+
         // Crawl the site and populate pages
         var result = crawler.crawl(
-            urls = urlArray,
+            urls = crawlSeeds,
             excludeUrls = arguments.excludeUrls,
             runAsync = arguments.runAsync
         );
@@ -118,6 +131,7 @@ component
             "processedUrls": result.processedUrls,
             "badUrls": result.badUrls,
             "disallowedUrls": result.disallowedUrls,
+            "ignored": result.ignored,
             "runAsync": result.runAsync,
             "filePath": arguments.filePath,
             "saved": saved

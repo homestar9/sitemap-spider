@@ -44,6 +44,10 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.excludedUrls = {}; // set of URLs explicitly excluded by the user
         variables.badUrls = {}; // urls that couldn't be fetched
         variables.disallowedUrls = {}; // set of URLs skipped because robots.txt disallows them
+        // Map of URL -> reason for links dropped during the crawl (nofollow /
+        // excluded / disallowed), surfaced in the result as the "ignored" array.
+        // A CFML struct in sync; initAsyncState swaps it for a ConcurrentHashMap.
+        variables.ignoredUrls = {};
         // robots.txt state, (re)loaded at the start of each crawl().
         variables.robotsBasePath = "/"; // site-root path the seed URL lives under
         variables.effectiveCrawlDelay = 0; // seconds to wait between fetches (capped)
@@ -225,24 +229,47 @@ component accessors=true hint="Handles crawling of website URLs" {
     }
 
     /**
-     * Decides whether a URL should be enqueued, and records the reason when not.
+     * Classifies why a URL can or cannot be enqueued, in one place.
      * @url The URL to check
      *
-     * A URL is enqueued only when it is a valid crawlable URL (isValidUrl) and
-     * robots.txt allows it. A URL that is valid but robots-disallowed is added to
-     * the disallowedUrls set so the caller can see what robots blocked. This is
-     * the single gate the seed loop and the link loop both call, so a disallowed
-     * URL is recorded once per crawl (the set de-duplicates repeats).
+     * Returns "" when the URL should be enqueued, or a reason string when it must
+     * be skipped:
+     *   - "notAllowed": off-host, wrong protocol, or matches notAllowedPattern.
+     *   - "excluded": in the caller's exact excludeUrls set, or matches the
+     *     excludePattern module setting.
+     *   - "disallowed": robots.txt disallows it (also recorded in disallowedUrls,
+     *     so that existing result key keeps working).
+     *
+     * This is the single decision point shared by shouldEnqueue (seeds,
+     * meta-refresh) and the link-expansion loop, so the enqueue rule and the
+     * ignored-reason reporting can never drift apart. The order matters: a URL is
+     * classified by the first rule that rejects it.
      */
-    private boolean function shouldEnqueue( required string url ) {
-        if ( !isValidUrl( arguments.url ) ) {
-            return false;
+    private string function enqueueDecision( required string url ) {
+        if ( !parser.isUrlAllowed( arguments.url ) ) {
+            return "notAllowed";
+        }
+        if ( isUrlExcluded( arguments.url ) ) {
+            return "excluded";
         }
         if ( !isAllowedByRobots( arguments.url ) ) {
             appendDisallowedUrl( arguments.url );
-            return false;
+            return "disallowed";
         }
-        return true;
+        return "";
+    }
+
+    /**
+     * Decides whether a URL should be enqueued, and records the reason when not.
+     * @url The URL to check
+     *
+     * Thin wrapper over enqueueDecision: a URL is enqueued only when no reason
+     * rejects it. A robots-disallowed URL is recorded in disallowedUrls by
+     * enqueueDecision so the caller can see what robots blocked; the set
+     * de-duplicates repeats, so a disallowed URL is recorded once per crawl.
+     */
+    private boolean function shouldEnqueue( required string url ) {
+        return enqueueDecision( arguments.url ) == "";
     }
 
     /**
@@ -353,8 +380,14 @@ component accessors=true hint="Handles crawling of website URLs" {
             var parsedPage = parser.parseHtml( fetchResult.html, fetchedUrl );
             // let's determine the canonical URL, links
             canonicalUrl = parser.getCanonicalUrl( fetchResult, parsedPage );
-            // extract links from the parsed page
-            links = parser.getLinks( parsedPage );
+            // extract links from the parsed page. getLinks returns { links, ignored }:
+            // links are the crawlable URLs; ignored are this page's nofollow drops,
+            // which we record so the caller sees them in the result's ignored list.
+            var linkResult = parser.getLinks( parsedPage );
+            links = linkResult.links;
+            for ( var ignoredLink in linkResult.ignored ) {
+                appendIgnoredUrl( ignoredLink.url, ignoredLink.reason );
+            }
             // determine the last modified date
             lastModified = parser.getLastModified( fetchResult, parsedPage );
 
@@ -409,10 +442,16 @@ component accessors=true hint="Handles crawling of website URLs" {
             depth = depth
         );
 
-        // loop through the links and enqueue
+        // loop through the links and enqueue. enqueueDecision returns "" to enqueue
+        // or a reason to skip; a skipped link is recorded in ignoredUrls so the
+        // caller can see it. These links are already isUrlAllowed (getLinks
+        // filtered them), so "notAllowed" will not occur here.
         for ( var link in links ) {
-            if ( shouldEnqueue( link ) ) {
+            var linkReason = enqueueDecision( link );
+            if ( !len( linkReason ) ) {
                 enqueue( link, depth + 1 );
+            } else {
+                appendIgnoredUrl( link, linkReason );
             }
         }
 
@@ -569,11 +608,21 @@ component accessors=true hint="Handles crawling of website URLs" {
     }
 
     /**
-     * Check if URL was excluded by the caller
+     * Check if URL was excluded, either by the caller's exact excludeUrls list or
+     * by the excludePattern module setting.
      * @url URL to check
+     *
+     * excludeUrls is an exact, whole-URL match (the per-crawl argument). The
+     * settings.excludePattern is a regex matched with reFindNoCase against the
+     * full URL, for whole-section excludes like "/admin/". An empty excludePattern
+     * matches nothing, so it is skipped.
      */
     private boolean function isUrlExcluded( required string url ) {
-        return variables.excludedUrls.keyExists( arguments.url );
+        if ( variables.excludedUrls.keyExists( arguments.url ) ) {
+            return true;
+        }
+        return len( settings.excludePattern )
+            && reFindNoCase( settings.excludePattern, arguments.url ) > 0;
     }
 
     private function getPriority( required numeric depth ) {
@@ -603,6 +652,28 @@ component accessors=true hint="Handles crawling of website URLs" {
             return;
         }
         variables.disallowedUrls[ arguments.url ] = true;
+    }
+
+    /**
+     * Records a link dropped during the crawl in the ignoredUrls map, keyed by URL
+     * with the drop reason as the value.
+     * @url The dropped URL
+     * @reason Why it was dropped ("nofollow", "excluded", or "disallowed")
+     *
+     * The first reason recorded for a URL wins: the same URL can be dropped for
+     * different reasons on different pages (e.g. nofollow on one page, a normal
+     * link excluded by pattern on another), and keeping the first keeps the report
+     * stable. Async uses putIfAbsent so the first worker's reason is kept; sync
+     * checks keyExists first to match that.
+     */
+    private void function appendIgnoredUrl( required string url, required string reason ) {
+        if ( variables.async ) {
+            variables.ignoredUrls.putIfAbsent( arguments.url, arguments.reason );
+            return;
+        }
+        if ( !variables.ignoredUrls.keyExists( arguments.url ) ) {
+            variables.ignoredUrls[ arguments.url ] = arguments.reason;
+        }
     }
 
     /**
@@ -648,6 +719,7 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.pages         = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.badUrls       = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.disallowedUrls = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
+        variables.ignoredUrls   = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.pending       = createObject( "java", "java.util.concurrent.atomic.AtomicInteger" ).init( javaCast( "int", 0 ) );
         variables.pageCount     = createObject( "java", "java.util.concurrent.atomic.AtomicInteger" ).init( javaCast( "int", 0 ) );
     }
@@ -729,6 +801,7 @@ component accessors=true hint="Handles crawling of website URLs" {
                 "badUrls": javaMapToStruct( variables.badUrls ),
                 "processedUrls": javaMapKeys( variables.processedUrls ),
                 "disallowedUrls": javaMapKeys( variables.disallowedUrls ),
+                "ignored": buildIgnoredPairs(),
                 "runAsync": true
             };
         }
@@ -740,8 +813,31 @@ component accessors=true hint="Handles crawling of website URLs" {
             // still a CFML struct in sync mode.
             "processedUrls": javaMapKeys( variables.processedUrls ),
             "disallowedUrls": structKeyArray( variables.disallowedUrls ),
+            "ignored": buildIgnoredPairs(),
             "runAsync": false
         };
+    }
+
+    /**
+     * Builds the ignored-URL report as an array of { url, reason } structs from
+     * the ignoredUrls map (URL -> reason). ignoredUrls is a CFML struct in sync
+     * mode and a ConcurrentHashMap in async mode, so each branch reads it in its
+     * own shape. The order is not guaranteed and callers should not rely on it.
+     */
+    private array function buildIgnoredPairs() {
+        var out = [];
+        if ( variables.async ) {
+            var iterator = variables.ignoredUrls.entrySet().iterator();
+            while ( iterator.hasNext() ) {
+                var entry = iterator.next();
+                out.append( { "url": entry.getKey(), "reason": entry.getValue() } );
+            }
+            return out;
+        }
+        variables.ignoredUrls.each( function( key, value ) {
+            out.append( { "url": arguments.key, "reason": arguments.value } );
+        } );
+        return out;
     }
 
     /**

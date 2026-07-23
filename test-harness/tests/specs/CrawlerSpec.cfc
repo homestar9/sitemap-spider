@@ -257,6 +257,55 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
+		describe( "crawl() ignored reporting and pattern excludes", function(){
+
+				it( "reports an excluded link in ignored with reason 'excluded'", function(){
+					var keepUrl = variables.root & "a.cfm";
+					var dropUrl = variables.root & "b.cfm";
+
+					var ctx = buildCrawler();
+					ctx.fake.addPage( variables.root, link( keepUrl ) & link( dropUrl ) );
+					ctx.fake.addPage( keepUrl, "" );
+					ctx.fake.addPage( dropUrl, "" );
+
+					var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [ dropUrl ] );
+
+					expect( result.ignored ).toBeArray();
+					var reasons = {};
+					for ( var entry in result.ignored ) {
+						reasons[ entry.url ] = entry.reason;
+					}
+					expect( reasons ).toHaveKey( dropUrl );
+					expect( reasons[ dropUrl ] ).toBe( "excluded" );
+				} );
+
+				it( "skips and reports a link matching excludePattern", function(){
+					var keepUrl  = variables.root & "a.cfm";
+					var adminUrl = variables.root & "admin/secret.cfm";
+
+					// excludePattern is a module setting; override it on a copy so the
+					// whole /admin/ section is skipped.
+					var ctx = buildCrawler( { excludePattern : "/admin/" } );
+					ctx.fake.addPage( variables.root, link( keepUrl ) & link( adminUrl ) );
+					ctx.fake.addPage( keepUrl, "" );
+					ctx.fake.addPage( adminUrl, "" );
+
+					var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+					expect( ctx.fake.getRequestedUrls().findNoCase( adminUrl ) ).toBe( 0 );
+					expect( result.pages ).notToHaveKey( adminUrl );
+					expect( result.pages ).toHaveKey( keepUrl );
+
+					var reasons = {};
+					for ( var entry in result.ignored ) {
+						reasons[ entry.url ] = entry.reason;
+					}
+					expect( reasons ).toHaveKey( adminUrl );
+					expect( reasons[ adminUrl ] ).toBe( "excluded" );
+				} );
+
+			} );
+
 		describe( "crawl() in parallel (runAsync=true)", function(){
 
 			// Wire a wider fan-out graph than the sample site so the parallel

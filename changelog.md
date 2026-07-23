@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ----
 
+## [Unreleased]
+
+### Added
+
+- `seedUrls` argument on `SitemapService.create()`: an array of extra start URLs
+  for orphan pages that no reachable page links to. They are crawled alongside
+  `url`; the host, `robots.txt` base, and split-file base URL still come from the
+  first `url`, so all seeds must share its host.
+- `ignored` key in the crawl result: an array of `{ url, reason }` structs for
+  links the crawl dropped, so you can see what was skipped and why. Reasons are
+  `"nofollow"` (a `rel="nofollow"` link), `"excluded"` (matched `excludeUrls` or
+  `excludePattern`), and `"disallowed"` (blocked by `robots.txt`). The existing
+  `disallowedUrls` array is unchanged; robots-blocked URLs appear in both.
+- `excludePattern` module setting: a regex matched case-insensitively against the
+  full URL for whole-section excludes (e.g. `/admin/`). A match skips the URL and
+  reports it in `ignored` with reason `"excluded"`. This is separate from the
+  per-crawl exact-URL `excludeUrls` argument. Defaults to empty (no pattern
+  exclusion).
+
+### Changed
+
+- `Parser.getLinks()` now returns a struct `{ links, ignored }` instead of a
+  plain array of link strings. `links` is the same crawlable-URL array as before;
+  `ignored` lists the page's `rel="nofollow"` drops as `{ url, reason }`.
+- `respectRobotsTxt` still defaults to `true`. Most users crawl their own site
+  and may prefer to ignore `robots.txt`; set `respectRobotsTxt = false` in the
+  module settings to do so.
+
+----
+
 ## [1.0.0] - 2026-07-21
 
 First stable release. The module crawls a site breadth-first from one or more

@@ -70,12 +70,23 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 	/*********************************** BDD SUITES ***********************************/
 
+	// Turns an ignored list (array of { url, reason }) into a sorted array of
+	// "url|reason" strings, so a sync and a parallel crawl can be compared without
+	// depending on order.
+	private array function ignoredPairs( required array ignored ){
+		var pairs = [];
+		for ( var entry in arguments.ignored ){
+			pairs.append( entry.url & "|" & entry.reason );
+		}
+		return pairs.sort( "textnocase" );
+	}
+
 	function run(){
 		describe( "Sitemap Tests", function(){
 
 			it( "returns a struct with the expected top-level keys", function(){
 				expect( variables.result ).toBeStruct();
-				expect( variables.result ).toHaveKey( "pages,badUrls,processedUrls,disallowedUrls,duration,filePath,saved" );
+				expect( variables.result ).toHaveKey( "pages,badUrls,processedUrls,disallowedUrls,ignored,duration,filePath,saved" );
 			} );
 
 			it( "does not save a file when no filePath is given", function(){
@@ -101,6 +112,23 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				// it is skipped (never fetched) and recorded in disallowedUrls.
 				expect( variables.result.disallowedUrls ).toBeArray();
 				expect( variables.result.disallowedUrls ).toInclude( variables.appRoot & "disallow.cfm" );
+			} );
+
+			it( "reports dropped links in ignored with their reasons", function(){
+				// index.cfm links nofollow.cfm with rel="nofollow" (dropped by the
+				// parser) and disallow.cfm which robots.txt blocks (dropped by the
+				// crawler). Both appear in the ignored list with the right reason.
+				// disallow.cfm still also appears in disallowedUrls (kept for
+				// back-compat), asserted in the spec above.
+				expect( variables.result.ignored ).toBeArray();
+				var reasons = {};
+				for ( var entry in variables.result.ignored ) {
+					reasons[ entry.url ] = entry.reason;
+				}
+				expect( reasons ).toHaveKey( variables.appRoot & "nofollow.cfm" );
+				expect( reasons[ variables.appRoot & "nofollow.cfm" ] ).toBe( "nofollow" );
+				expect( reasons ).toHaveKey( variables.appRoot & "disallow.cfm" );
+				expect( reasons[ variables.appRoot & "disallow.cfm" ] ).toBe( "disallowed" );
 			} );
 
 			it( "records unreachable links as bad URLs", function(){
@@ -167,6 +195,27 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				expect( result.pages ).toHaveKey( newUrl );
 				expect( result.pages ).notToHaveKey( oldUrl );
+			} );
+
+		} );
+
+		describe( "orphan-page seeding", function(){
+
+			it( "crawls an orphan page and its links when passed via seedUrls", function(){
+				// noBaseHref.cfm is not linked from any reachable page, so the
+				// baseline crawl never sees it. Seeding it directly lets the crawl
+				// reach it, and it links to posts.cfm with a base-less relative href.
+				// posts.cfm shows up only if the crawler passes the fetched URL as the
+				// parse base (the task 17 fix) — this is the first end-to-end test of
+				// that path.
+				var result = getInstance( "sitemapService@sitemap-spider" )
+					.create(
+						url      = variables.appRoot,
+						seedUrls = [ variables.appRoot & "noBaseHref.cfm" ]
+					);
+
+				expect( result.pages ).toHaveKey( variables.appRoot & "noBaseHref.cfm" );
+				expect( result.pages ).toHaveKey( variables.appRoot & "posts.cfm" );
 			} );
 
 		} );
@@ -246,6 +295,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					.toBe( structKeyArray( variables.result.badUrls ).sort( "textnocase" ) );
 				expect( async.disallowedUrls.sort( "textnocase" ) )
 					.toBe( variables.result.disallowedUrls.sort( "textnocase" ) );
+				// The ignored list (array of { url, reason }) must match too. Compare
+				// sorted "url|reason" strings so order does not matter.
+				expect( ignoredPairs( async.ignored ) ).toBe( ignoredPairs( variables.result.ignored ) );
 			} );
 
 			// A race that only sometimes surfaces would make the recorded page set

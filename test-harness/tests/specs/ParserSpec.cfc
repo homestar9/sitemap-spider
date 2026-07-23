@@ -272,12 +272,24 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			describe( "getLinks()", function(){
 
+				it( "returns a struct with links and ignored arrays", function(){
+					var page = parseWithBase(
+						'<a href="page.cfm">link</a>',
+						"http://example.test/dir/"
+					);
+					var result = variables.parser.getLinks( page );
+					expect( result ).toBeStruct();
+					expect( result ).toHaveKey( "links,ignored" );
+					expect( result.links ).toBeArray();
+					expect( result.ignored ).toBeArray();
+				} );
+
 				it( "resolves a relative href to an absolute URL", function(){
 					var page = parseWithBase(
 						'<a href="page.cfm">link</a>',
 						"http://example.test/dir/"
 					);
-					expect( variables.parser.getLinks( page ) ).toInclude( "http://example.test/dir/page.cfm" );
+					expect( variables.parser.getLinks( page ).links ).toInclude( "http://example.test/dir/page.cfm" );
 				} );
 
 				it( "resolves a relative href when parseHtml is given a base URI and the page has no <base> tag", function(){
@@ -288,18 +300,41 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 						'<html><body><a href="page.cfm">link</a></body></html>',
 						"http://example.test/dir/"
 					);
-					expect( variables.parser.getLinks( page ) ).toInclude( "http://example.test/dir/page.cfm" );
+					expect( variables.parser.getLinks( page ).links ).toInclude( "http://example.test/dir/page.cfm" );
 				} );
 
-				it( "drops a link marked rel=nofollow", function(){
+				it( "drops a link marked rel=nofollow from links", function(){
 					var page = parseWithBase(
 						'<a href="http://example.test/keep.cfm">keep</a>'
 						& '<a href="http://example.test/skip.cfm" rel="nofollow">skip</a>',
 						"http://example.test/"
 					);
-					var links = variables.parser.getLinks( page );
+					var links = variables.parser.getLinks( page ).links;
 					expect( links ).toInclude( "http://example.test/keep.cfm" );
 					expect( links.findNoCase( "http://example.test/skip.cfm" ) ).toBe( 0 );
+				} );
+
+				it( "reports a nofollow link in ignored with reason 'nofollow'", function(){
+					var page = parseWithBase(
+						'<a href="http://example.test/keep.cfm">keep</a>'
+						& '<a href="http://example.test/skip.cfm" rel="nofollow">skip</a>',
+						"http://example.test/"
+					);
+					var ignored = variables.parser.getLinks( page ).ignored;
+					expect( ignored.len() ).toBe( 1 );
+					expect( ignored[ 1 ].url ).toBe( "http://example.test/skip.cfm" );
+					expect( ignored[ 1 ].reason ).toBe( "nofollow" );
+				} );
+
+				it( "does not report off-host or image links as ignored", function(){
+					// Off-host and image links are dropped silently, not reported,
+					// so a page with only those has an empty ignored list.
+					var page = parseWithBase(
+						'<a href="http://example.test/pic.jpg">image</a>'
+						& '<a href="http://other.test/x.cfm">other host</a>',
+						"http://example.test/"
+					);
+					expect( variables.parser.getLinks( page ).ignored ).toBeEmpty();
 				} );
 
 				it( "returns a duplicated href only once", function(){
@@ -308,7 +343,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 						& '<a href="http://example.test/dup.cfm">two</a>',
 						"http://example.test/"
 					);
-					var links = variables.parser.getLinks( page );
+					var links = variables.parser.getLinks( page ).links;
 					var occurrences = 0;
 					for ( var link in links ) {
 						if ( link == "http://example.test/dup.cfm" ) {
@@ -324,7 +359,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 						& '<a href="http://other.test/x.cfm">other host</a>',
 						"http://example.test/"
 					);
-					var links = variables.parser.getLinks( page );
+					var links = variables.parser.getLinks( page ).links;
 					expect( links.findNoCase( "http://example.test/pic.jpg" ) ).toBe( 0 );
 					expect( links.findNoCase( "http://other.test/x.cfm" ) ).toBe( 0 );
 				} );

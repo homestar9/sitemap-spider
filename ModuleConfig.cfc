@@ -41,6 +41,12 @@ component {
             userAgent : "sitemap-spider", // matched against robots User-agent groups and sent on fetches
             maxCrawlDelay : 10, // cap (seconds) on the robots Crawl-delay actually applied between fetches
             notAllowedPattern : "\.(png|webp|svg|gif|js|css|jpg|jpeg)$|javascript:|mailto:|tel:",
+            // Regex for whole-section excludes, matched case-insensitively against
+            // the full URL. A match skips the URL, which is then reported in the
+            // crawl result's "ignored" list with reason "excluded". Empty means no
+            // pattern exclusion. This is separate from the per-crawl excludeUrls
+            // argument, which is an exact whole-URL match. Example: "/admin/".
+            excludePattern : "",
             // Query-param and ;jsessionid path-param names stripped by
             // Parser.normalizeUrl so session tokens and tracking params never
             // reach dedup keys or the sitemap. Matched case-insensitively.

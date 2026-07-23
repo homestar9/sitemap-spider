@@ -33,21 +33,43 @@ component accessors=true hint="Parses HTML content to extract links and metadata
      * @page The jSoup document. It must have been parsed with a base URI (see
      *   parseHtml) or carry a <base href> tag, otherwise a relative href resolves
      *   to "" and is dropped by isUrlAllowed.
+     *
+     * Returns a struct { links, ignored }:
+     *   - links: an array of crawlable, deduped, absolute URL strings.
+     *   - ignored: an array of { url, reason } structs for links this page had but
+     *     dropped, so the caller can see what was skipped and why. The only reason
+     *     this function reports is "nofollow" (a link with rel="nofollow"). The
+     *     crawler adds the other reasons ("excluded", "disallowed") later, since
+     *     excludeUrls and robots.txt are Crawler concerns, not Parser ones.
+     *
+     * Off-host links and links matching notAllowedPattern (images, css/js,
+     * mailto:, tel:) are dropped silently and are NOT reported in ignored. They
+     * are not "our" links, so reporting every one of them would flood the list.
+     * In-page duplicates are also dropped silently.
+     *
+     * The checks run in order so only on-host, allowed links can be reported as
+     * nofollow: an off-host nofollow link is filtered by isUrlAllowed first and
+     * never reaches the nofollow check.
      */
-    array function getLinks( required any page ) {
-        var links = [ ];
+    struct function getLinks( required any page ) {
+        var links   = [ ];
+        var ignored = [ ];
         arguments.page.select( "a[href]" ).each( function( link, index ) {
             var linkUrl = cleanUrl( arguments.link.attr( "abs:href" ) );
             logger.info( "Found link: #linkUrl#" );
-            if ( 
-                isUrlAllowed( linkUrl ) && 
-                !isNoFollow( arguments.link ) &&
-                !links.find( linkUrl ) 
-            ) {
-                links.append( linkUrl );
+            if ( !isUrlAllowed( linkUrl ) ) {
+                return; // off-host / image / mailto: dropped silently
             }
+            if ( isNoFollow( arguments.link ) ) {
+                ignored.append( { "url": linkUrl, "reason": "nofollow" } );
+                return;
+            }
+            if ( links.find( linkUrl ) ) {
+                return; // in-page duplicate: dropped silently
+            }
+            links.append( linkUrl );
         } );
-        return links;
+        return { "links": links, "ignored": ignored };
     }
 
     /**
