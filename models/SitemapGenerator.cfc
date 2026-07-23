@@ -19,22 +19,30 @@ component {
      * generateSet(), which splits into child sitemaps plus an index.
      *
      * @pages (required array) page structs to generate the sitemap for, each with
-     *   a url field plus lastModified, priority, and (when includeImages) images
+     *   a url field plus lastModified, priority, and (per the include flags)
+     *   images, alternates, and videos
      * @lastModFormat "date" for date-only <lastmod> (default), "datetime" for the
      *   full W3C timestamp. See formatLastMod.
      * @includeImages when true, each page's images array is emitted as
      *   <image:image> entries and the <urlset> gains the image namespace. Must
      *   match the value used to build the page structs; false keeps the output
      *   byte-identical to the pre-image behavior.
+     * @includeHreflang when true, each page's alternates array is emitted as
+     *   <xhtml:link> entries and the <urlset> gains the xhtml namespace.
+     * @includeVideos when true, each page's videos array is emitted as
+     *   <video:video> blocks and the <urlset> gains the video namespace.
      */
     function generate(
         required array pages,
         string lastModFormat = "date",
-        boolean includeImages = false
+        boolean includeImages = false,
+        boolean includeHreflang = false,
+        boolean includeVideos = false
     ) {
-        var xml = variables.xmlHeader & urlsetOpenTag( arguments.includeImages );
+        var xml = variables.xmlHeader
+            & urlsetOpenTag( arguments.includeImages, arguments.includeHreflang, arguments.includeVideos );
         for ( var data in arguments.pages ) {
-            xml &= buildUrlEntry( data, lastModFormat, includeImages );
+            xml &= buildUrlEntry( data, lastModFormat, includeImages, includeHreflang, includeVideos );
         }
         xml &= variables.urlsetClose;
         return xml;
@@ -70,6 +78,8 @@ component {
      *   and used for the index <lastmod>. See formatLastMod.
      * @includeImages passed through to each entry and used for the <urlset>
      *   envelope tag and byte accounting. See generate.
+     * @includeHreflang passed through to each entry and the envelope. See generate.
+     * @includeVideos passed through to each entry and the envelope. See generate.
      */
     function generateSet(
         required array pages,
@@ -79,11 +89,13 @@ component {
         numeric maxBytes = 52428800,
         boolean gzip = false,
         string lastModFormat = "date",
-        boolean includeImages = false
+        boolean includeImages = false,
+        boolean includeHreflang = false,
+        boolean includeVideos = false
     ) {
         // The <urlset> envelope for this set, chosen once so every chunk and the
         // byte accounting below use the same open tag.
-        var urlsetOpen = urlsetOpenTag( arguments.includeImages );
+        var urlsetOpen = urlsetOpenTag( arguments.includeImages, arguments.includeHreflang, arguments.includeVideos );
 
         // Byte size of an empty <urlset> file. Seeded into each chunk's running
         // total so the size check counts the envelope, not just the entries.
@@ -96,7 +108,13 @@ component {
         var current = ""; // becomes a struct once the first entry is placed
 
         for ( var data in arguments.pages ) {
-            var entry      = buildUrlEntry( data, arguments.lastModFormat, arguments.includeImages );
+            var entry = buildUrlEntry(
+                data,
+                arguments.lastModFormat,
+                arguments.includeImages,
+                arguments.includeHreflang,
+                arguments.includeVideos
+            );
             var entryBytes = byteLength( entry );
 
             // Roll to a new chunk only when the current one already holds an
@@ -177,15 +195,23 @@ component {
      * Build the <url>...</url> markup for one page. Shared by generate() and
      * generateSet() so both emit identical entries.
      *
-     * @data the page struct with url, lastModified, and priority keys (and images
-     *   when includeImages is on). The url field becomes the <loc>.
+     * @data the page struct with url, lastModified, and priority keys (and
+     *   images, alternates, videos when the matching include flag is on). The
+     *   url field becomes the <loc>.
      * @lastModFormat "date" or "datetime" for the <lastmod> element
      * @includeImages when true, emit an <image:image> for each URL in data.images
+     * @includeHreflang when true, emit an <xhtml:link> for each entry in
+     *   data.alternates (structs with hreflang and href keys)
+     * @includeVideos when true, emit a <video:video> block for each entry in
+     *   data.videos (structs with title, description, thumbnailLoc, contentLoc,
+     *   playerLoc keys)
      */
     private string function buildUrlEntry(
         required struct data,
         string lastModFormat = "date",
-        boolean includeImages = false
+        boolean includeImages = false,
+        boolean includeHreflang = false,
+        boolean includeVideos = false
     ) {
         var entry = '<url>';
         entry &= '<loc>#xmlFormat( arguments.data.url )#</loc>';
@@ -197,12 +223,35 @@ component {
         }
         // Priority is a value from 0.0 to 1.0; render one decimal place.
         entry &= '<priority>#numberFormat( arguments.data.priority, "0.0" )#</priority>';
-        // Image-extension entries come after the core sitemaps.org sequence
-        // (loc, lastmod, priority), so the core element order stays valid. Guard
-        // on the images key because callers may build page structs without it.
+        // Extension entries come after the core sitemaps.org sequence (loc,
+        // lastmod, priority), so the core element order stays valid. Each block
+        // guards on its key because callers may build page structs without it.
+        if ( arguments.includeHreflang && arguments.data.keyExists( "alternates" ) ) {
+            for ( var alt in arguments.data.alternates ) {
+                entry &= '<xhtml:link rel="alternate" hreflang="#xmlFormat( alt.hreflang )#" href="#xmlFormat( alt.href )#"/>';
+            }
+        }
         if ( arguments.includeImages && arguments.data.keyExists( "images" ) ) {
             for ( var img in arguments.data.images ) {
                 entry &= '<image:image><image:loc>#xmlFormat( img )#</image:loc></image:image>';
+            }
+        }
+        // Element order inside <video:video> follows Google's video-sitemap
+        // schema: thumbnail_loc, title, description, then content_loc and/or
+        // player_loc. The Parser guarantees at least one of the two URLs is set.
+        if ( arguments.includeVideos && arguments.data.keyExists( "videos" ) ) {
+            for ( var video in arguments.data.videos ) {
+                entry &= '<video:video>';
+                entry &= '<video:thumbnail_loc>#xmlFormat( video.thumbnailLoc )#</video:thumbnail_loc>';
+                entry &= '<video:title>#xmlFormat( video.title )#</video:title>';
+                entry &= '<video:description>#xmlFormat( video.description )#</video:description>';
+                if ( len( video.contentLoc ) ) {
+                    entry &= '<video:content_loc>#xmlFormat( video.contentLoc )#</video:content_loc>';
+                }
+                if ( len( video.playerLoc ) ) {
+                    entry &= '<video:player_loc>#xmlFormat( video.playerLoc )#</video:player_loc>';
+                }
+                entry &= '</video:video>';
             }
         }
         entry &= '</url>';
@@ -211,16 +260,33 @@ component {
 
     /**
      * urlsetOpenTag
-     * Return the opening <urlset> tag. The image-extension namespace is added
-     * only when includeImages is true, so a normal crawl's output stays
-     * byte-for-byte the same as before this feature existed.
+     * Return the opening <urlset> tag. Each extension namespace is added only
+     * when its flag is true, so a normal crawl's output stays byte-for-byte the
+     * same as before the extensions existed.
      *
      * @includeImages whether the sitemap emits <image:image> entries
+     * @includeHreflang whether the sitemap emits <xhtml:link> entries
+     * @includeVideos whether the sitemap emits <video:video> blocks
      */
-    private string function urlsetOpenTag( required boolean includeImages ) {
-        return arguments.includeImages
-            ? '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">'
-            : variables.urlsetOpen;
+    private string function urlsetOpenTag(
+        required boolean includeImages,
+        boolean includeHreflang = false,
+        boolean includeVideos = false
+    ) {
+        if ( !arguments.includeImages && !arguments.includeHreflang && !arguments.includeVideos ) {
+            return variables.urlsetOpen;
+        }
+        var tag = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"';
+        if ( arguments.includeImages ) {
+            tag &= ' xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"';
+        }
+        if ( arguments.includeHreflang ) {
+            tag &= ' xmlns:xhtml="http://www.w3.org/1999/xhtml"';
+        }
+        if ( arguments.includeVideos ) {
+            tag &= ' xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"';
+        }
+        return tag & '>';
     }
 
     /**

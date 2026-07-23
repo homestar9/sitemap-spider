@@ -34,17 +34,25 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	}
 
 	// Builds one page struct in the array shape generate()/generateSet() take. The
-	// images key is added only when passed, so a page without images stays
-	// image-free (the generator guards on the key).
+	// images/alternates/videos keys are added only when passed, so a page without
+	// them stays extension-free (the generator guards on each key).
 	private struct function page(
 		required string url,
 		required numeric priority,
 		any lastModified = "",
-		array images
+		array images,
+		array alternates,
+		array videos
 	){
 		var p = { url : arguments.url, lastModified : arguments.lastModified, priority : arguments.priority };
 		if ( !isNull( arguments.images ) ){
 			p.images = arguments.images;
+		}
+		if ( !isNull( arguments.alternates ) ){
+			p.alternates = arguments.alternates;
+		}
+		if ( !isNull( arguments.videos ) ){
+			p.videos = arguments.videos;
 		}
 		return p;
 	}
@@ -184,6 +192,186 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					] );
 					expect( withImages ).toBe( withoutImages );
 					expect( withImages.findNoCase( "image:" ) ).toBe( 0 );
+				} );
+
+				it( "adds the xhtml namespace and <xhtml:link> entries when includeHreflang is on", function(){
+					var pages = [
+						page(
+							url        = "http://example.test/a.cfm",
+							priority   = 0.5,
+							alternates = [
+								{ hreflang : "es", href : "https://es.example.test/" },
+								{ hreflang : "x-default", href : "http://example.test/a.cfm" }
+							]
+						)
+					];
+					var xml = variables.generator.generate( pages = pages, includeHreflang = true );
+
+					expect( xml ).toInclude( 'xmlns:xhtml="http://www.w3.org/1999/xhtml"' );
+					expect( xml ).toInclude( '<xhtml:link rel="alternate" hreflang="es" href="https://es.example.test/"/>' );
+					expect( xml ).toInclude( '<xhtml:link rel="alternate" hreflang="x-default" href="http://example.test/a.cfm"/>' );
+					// Valid XML with the namespace declared.
+					var doc = xmlParse( xml );
+					expect( doc.xmlRoot.xmlName ).toBe( "urlset" );
+				} );
+
+				it( "escapes an ampersand in an alternate href attribute", function(){
+					var pages = [
+						page(
+							url        = "http://example.test/a.cfm",
+							priority   = 0.5,
+							alternates = [ { hreflang : "de", href : "https://example.de/?a=1&b=2" } ]
+						)
+					];
+					var xml = variables.generator.generate( pages = pages, includeHreflang = true );
+
+					expect( xml ).toInclude( 'href="https://example.de/?a=1&amp;b=2"' );
+					// Parses back with the original attribute value intact.
+					var doc  = xmlParse( xml );
+					var link = doc.xmlRoot.xmlChildren[ 1 ].xmlChildren[ 3 ];
+					expect( link.xmlAttributes[ "href" ] ).toBe( "https://example.de/?a=1&b=2" );
+				} );
+
+				it( "adds the video namespace and a <video:video> block in schema element order when includeVideos is on", function(){
+					var pages = [
+						page(
+							url      = "http://example.test/a.cfm",
+							priority = 0.5,
+							videos   = [ {
+								title        : "Clip Title",
+								description  : "Clip description.",
+								thumbnailLoc : "http://example.test/thumb.jpg",
+								contentLoc   : "http://example.test/clip.mp4",
+								playerLoc    : ""
+							} ]
+						)
+					];
+					var xml = variables.generator.generate( pages = pages, includeVideos = true );
+
+					expect( xml ).toInclude( 'xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"' );
+					expect( xml ).toInclude(
+						"<video:video>"
+						& "<video:thumbnail_loc>http://example.test/thumb.jpg</video:thumbnail_loc>"
+						& "<video:title>Clip Title</video:title>"
+						& "<video:description>Clip description.</video:description>"
+						& "<video:content_loc>http://example.test/clip.mp4</video:content_loc>"
+						& "</video:video>"
+					);
+					var doc = xmlParse( xml );
+					expect( doc.xmlRoot.xmlName ).toBe( "urlset" );
+				} );
+
+				it( "emits player_loc for an OG-sourced video and content_loc for a file video", function(){
+					var pages = [
+						page(
+							url      = "http://example.test/a.cfm",
+							priority = 0.5,
+							videos   = [
+								{
+									title        : "Embedded",
+									description  : "From og:video.",
+									thumbnailLoc : "http://example.test/t1.jpg",
+									contentLoc   : "",
+									playerLoc    : "https://player.other/embed/1"
+								},
+								{
+									title        : "Hosted",
+									description  : "From a video tag.",
+									thumbnailLoc : "http://example.test/t2.jpg",
+									contentLoc   : "http://example.test/clip.mp4",
+									playerLoc    : ""
+								}
+							]
+						)
+					];
+					var xml = variables.generator.generate( pages = pages, includeVideos = true );
+
+					expect( xml ).toInclude( "<video:player_loc>https://player.other/embed/1</video:player_loc>" );
+					expect( xml ).toInclude( "<video:content_loc>http://example.test/clip.mp4</video:content_loc>" );
+					// The OG-sourced entry has no content_loc, so exactly one of each.
+					expect( xml.reMatch( "<video:content_loc>" ).len() ).toBe( 1 );
+					expect( xml.reMatch( "<video:player_loc>" ).len() ).toBe( 1 );
+				} );
+
+				it( "escapes XML special characters in video title and description", function(){
+					var pages = [
+						page(
+							url      = "http://example.test/a.cfm",
+							priority = 0.5,
+							videos   = [ {
+								title        : "Tom & Jerry <clip>",
+								description  : 'A "classic" & more',
+								thumbnailLoc : "http://example.test/t.jpg",
+								contentLoc   : "http://example.test/clip.mp4",
+								playerLoc    : ""
+							} ]
+						)
+					];
+					var xml = variables.generator.generate( pages = pages, includeVideos = true );
+
+					expect( xml ).toInclude( "<video:title>Tom &amp; Jerry &lt;clip&gt;</video:title>" );
+					// Parses back to the original text (would throw if unescaped).
+					var doc   = xmlParse( xml );
+					var video = doc.xmlRoot.xmlChildren[ 1 ].xmlChildren[ 3 ];
+					expect( video.xmlChildren[ 2 ].xmlText ).toBe( "Tom & Jerry <clip>" );
+					expect( video.xmlChildren[ 3 ].xmlText ).toBe( 'A "classic" & more' );
+				} );
+
+				it( "keeps output byte-identical when includeHreflang and includeVideos are off", function(){
+					// A page that happens to carry alternates and videos must produce
+					// the exact same XML as one without them when both flags are off.
+					var withExtensions = variables.generator.generate( [
+						page(
+							url        = "http://example.test/a.cfm",
+							priority   = 0.5,
+							alternates = [ { hreflang : "es", href : "https://es.example.test/" } ],
+							videos     = [ {
+								title        : "T",
+								description  : "D",
+								thumbnailLoc : "http://example.test/t.jpg",
+								contentLoc   : "http://example.test/c.mp4",
+								playerLoc    : ""
+							} ]
+						)
+					] );
+					var withoutExtensions = variables.generator.generate( [
+						page( "http://example.test/a.cfm", 0.5 )
+					] );
+					expect( withExtensions ).toBe( withoutExtensions );
+					expect( withExtensions.findNoCase( "xhtml:" ) ).toBe( 0 );
+					expect( withExtensions.findNoCase( "video:" ) ).toBe( 0 );
+				} );
+
+				it( "declares all three extension namespaces when images, hreflang, and videos are all on", function(){
+					var pages = [
+						page(
+							url        = "http://example.test/a.cfm",
+							priority   = 0.5,
+							images     = [ "http://example.test/i.jpg" ],
+							alternates = [ { hreflang : "es", href : "https://es.example.test/" } ],
+							videos     = [ {
+								title        : "T",
+								description  : "D",
+								thumbnailLoc : "http://example.test/t.jpg",
+								contentLoc   : "http://example.test/c.mp4",
+								playerLoc    : ""
+							} ]
+						)
+					];
+					var xml = variables.generator.generate(
+						pages           = pages,
+						includeImages   = true,
+						includeHreflang = true,
+						includeVideos   = true
+					);
+
+					expect( xml ).toInclude( 'xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"' );
+					expect( xml ).toInclude( 'xmlns:xhtml="http://www.w3.org/1999/xhtml"' );
+					expect( xml ).toInclude( 'xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"' );
+					// The extension entries sit side by side inside one <url> and the
+					// document still parses.
+					var doc = xmlParse( xml );
+					expect( doc.xmlRoot.xmlChildren.len() ).toBe( 1 );
 				} );
 
 			} );
