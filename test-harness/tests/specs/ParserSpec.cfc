@@ -366,6 +366,48 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			} );
 
+			describe( "getImages()", function(){
+
+					it( "resolves a relative img src to an absolute URL", function(){
+						var page = parseWithBase(
+							'<img src="pic.jpg">',
+							"http://example.test/dir/"
+						);
+						expect( variables.parser.getImages( page ) ).toInclude( "http://example.test/dir/pic.jpg" );
+					} );
+
+					it( "keeps off-host (CDN) images", function(){
+						// Unlike page links, images are not host-filtered.
+						var page = parseWithBase(
+							'<img src="http://cdn.other/a.png">',
+							"http://example.test/"
+						);
+						expect( variables.parser.getImages( page ) ).toInclude( "http://cdn.other/a.png" );
+					} );
+
+					it( "skips empty and data: URIs", function(){
+						var page = parseWithBase(
+							'<img src="">'
+							& '<img src="data:image/png;base64,AAAA">'
+							& '<img src="real.jpg">',
+							"http://example.test/"
+						);
+						var images = variables.parser.getImages( page );
+						expect( images.len() ).toBe( 1 );
+						expect( images ).toInclude( "http://example.test/real.jpg" );
+					} );
+
+					it( "returns a duplicated image only once", function(){
+						var page = parseWithBase(
+							'<img src="http://example.test/dup.jpg">'
+							& '<img src="http://example.test/dup.jpg">',
+							"http://example.test/"
+						);
+						expect( variables.parser.getImages( page ).len() ).toBe( 1 );
+					} );
+
+				} );
+
 			describe( "getMetaRefreshUrl()", function(){
 
 				it( "resolves a relative target against the base URL", function(){

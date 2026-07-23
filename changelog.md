@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `gzipOutput` module setting: when `true` and a `filePath` is given, the sitemap
+  files are written gzip-compressed with a `.gz` suffix (e.g. `sitemap.xml.gz`).
+  For a split set the child filenames and the `<sitemapindex>` `<loc>` entries
+  carry `.gz` too, and `result.filePath` reports the `.gz` path. Defaults to
+  `false` (plain XML).
+- `lastModFormat` module setting: `"date"` (default) writes the date-only
+  `<lastmod>` (`YYYY-MM-DD`); `"datetime"` writes the full W3C timestamp
+  (`YYYY-MM-DDThh:mm:ss+HH:MM`) in the server's local timezone.
+- `includeImages` module setting: when `true`, each crawled page's `<img src>`
+  images are collected and emitted as `<image:image>` entries, and the
+  `<urlset>` gains the image namespace. Images are not host-filtered (CDN images
+  are kept), and each page's `images` array is included in the crawl result.
+  Defaults to `false` (no image entries, output unchanged).
 - `seedUrls` argument on `SitemapService.create()`: an array of extra start URLs
   for orphan pages that no reachable page links to. They are crawled alongside
   `url`; the host, `robots.txt` base, and split-file base URL still come from the

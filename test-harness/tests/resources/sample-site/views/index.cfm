@@ -4,6 +4,10 @@
         <h1>Welcome to Example Test</h1>
         <p>This page includes static and tricky links.</p>
 
+        <!-- INTENTIONAL: image for the image-sitemap test (task 19). Relative
+             src resolves against the page URL to an absolute image URL. -->
+        <img src="./assets/img/sample.jpg" alt="Sample image" />
+
         <!--- INTENTIONAL: External url --->
         <a href="https://www.angrysam.com">Angry Sam Productions</a><br />
         <!-- INTENTIONAL TRICK: absolute http link (should be detected as duplicate from nav) -->

@@ -73,6 +73,41 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
+     * Extracts image URLs from a page for an image sitemap.
+     * @page The jSoup document. It must have been parsed with a base URI (see
+     *   parseHtml) or carry a <base href> tag, so a relative src resolves to an
+     *   absolute URL via attr( "abs:src" ).
+     *
+     * Returns an array of absolute image URL strings. Unlike page links, images
+     * are NOT host-filtered: an image sitemap may reference images served from a
+     * CDN or another host. Empty and data: URIs are skipped, in-page duplicates
+     * are dropped, and the list is capped at 1000 (Google's per-URL image limit).
+     */
+    array function getImages( required any page ) {
+        var images = [];
+        var seen   = {};
+        arguments.page.select( "img[src]" ).each( function( img ) {
+            // Check the raw src first: jsoup resolves an empty src="" against the
+            // base URI to the page URL, so abs:src would look non-empty. A data:
+            // URI is an inline image, not a fetchable URL, so skip it too.
+            var rawSrc = trim( arguments.img.attr( "src" ) );
+            if ( !len( rawSrc ) || left( rawSrc, 5 ) == "data:" ) {
+                return;
+            }
+            var src = trim( arguments.img.attr( "abs:src" ) );
+            if ( !len( src ) ) {
+                return; // could not resolve to an absolute URL
+            }
+            if ( seen.keyExists( src ) || images.len() >= 1000 ) {
+                return; // duplicate on this page, or past the per-URL cap
+            }
+            seen[ src ] = true;
+            images.append( src );
+        } );
+        return images;
+    }
+
+    /**
      * Gets the last modified date from a fetch result as a real date object.
      * @fetchResult The fetch result containing headers and body.
      * @parsedPage The jSoup document for the page (optional). When present, its

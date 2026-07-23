@@ -84,6 +84,11 @@ component
         // filePath was given (still used to name the <sitemapindex> children).
         var primaryFilename = len( arguments.filePath ) ? getFileFromPath( arguments.filePath ) : "sitemap.xml";
 
+        // Gzip only applies when we are actually writing files. When on, the
+        // generated child filenames and index <loc> entries carry ".gz", and the
+        // files below are written compressed.
+        var gzip = settings.gzipOutput && len( arguments.filePath );
+
         // Generate the sitemap set. Below the per-file limits this is a single
         // <urlset>; above them it is a <sitemapindex> plus child <urlset> files.
         var setResult = generator.generateSet(
@@ -91,31 +96,43 @@ component
             publicBaseUrl  = baseUrl,
             primaryFilename = primaryFilename,
             maxUrls        = settings.maxUrlsPerSitemap,
-            maxBytes       = settings.maxSitemapBytes
+            maxBytes       = settings.maxSitemapBytes,
+            gzip           = gzip,
+            lastModFormat  = settings.lastModFormat,
+            includeImages  = settings.includeImages
         );
+
+        // The path the primary file is actually written to. With gzip on, ".gz"
+        // is appended (once — a filePath that already ends in ".gz" is left as
+        // is), so the returned filePath below points at the file that exists on
+        // disk.
+        var outputFilePath = ( gzip && right( arguments.filePath, 3 ) != ".gz" )
+            ? arguments.filePath & ".gz"
+            : arguments.filePath;
 
         // Optionally save to disk. A failure here is surfaced as a typed error
         // rather than swallowed, so the caller knows the file was not written.
-        // For a split set the index is written to filePath and each child is
-        // written beside it under its derived filename.
+        // For a split set the index is written to outputFilePath and each child is
+        // written beside it under its derived filename (already carrying ".gz"
+        // when gzip is on).
         var saved    = false;
         var sitemaps = setResult.sitemaps;
         if ( len( arguments.filePath ) ) {
             try {
-                generator.saveToFile( setResult.xml, arguments.filePath );
+                generator.saveToFile( setResult.xml, outputFilePath, gzip );
                 if ( setResult.type == "index" ) {
                     var dir = getDirectoryFromPath( arguments.filePath );
                     for ( var child in sitemaps ) {
                         child.filePath = dir & child.filename;
-                        generator.saveToFile( child.xml, child.filePath );
+                        generator.saveToFile( child.xml, child.filePath, gzip );
                     }
                 }
                 saved = true;
             } catch ( any e ) {
-                logger.error( "Failed to save sitemap to #arguments.filePath#: #e.message#", e );
+                logger.error( "Failed to save sitemap to #outputFilePath#: #e.message#", e );
                 throw(
                     type = "sitemap-spider.SaveFailed",
-                    message = "Could not save sitemap to '#arguments.filePath#'",
+                    message = "Could not save sitemap to '#outputFilePath#'",
                     detail = e.message
                 );
             }
@@ -133,7 +150,9 @@ component
             "disallowedUrls": result.disallowedUrls,
             "ignored": result.ignored,
             "runAsync": result.runAsync,
-            "filePath": arguments.filePath,
+            // Report the path that was actually written (with ".gz" when gzip is
+            // on); empty when nothing was saved.
+            "filePath": len( arguments.filePath ) ? outputFilePath : arguments.filePath,
             "saved": saved
         };
     }

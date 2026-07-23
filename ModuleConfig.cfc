@@ -59,6 +59,20 @@ component {
             // is the uncompressed file size (50 MiB).
             maxUrlsPerSitemap : 50000,
             maxSitemapBytes : 52428800,
+            // When true and a filePath is given to SitemapService.create, the
+            // sitemap files are written gzip-compressed with a ".gz" suffix
+            // (e.g. "sitemap.xml.gz"). The protocol allows gzipped sitemaps and
+            // very large sites rely on them. false writes plain XML.
+            gzipOutput : false,
+            // Format of the <lastmod> element. "date" writes the date-only W3C
+            // form (YYYY-MM-DD), the default. "datetime" writes the full W3C
+            // timestamp (YYYY-MM-DDThh:mm:ss+HH:MM) in the server's local
+            // timezone, for pages with a precise known modification time.
+            lastModFormat : "date",
+            // When true, each crawled page's <img src> images are collected and
+            // emitted as <image:image> entries, and the <urlset> gains the image
+            // namespace. false leaves images out and keeps the output unchanged.
+            includeImages : false,
             // What <lastmod> does when a page has no parseable Last-Modified
             // (no HTTP header, no meta tag): "omit" leaves <lastmod> out for that
             // URL (honest); "crawlTime" records the crawl timestamp instead.

@@ -105,6 +105,70 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					expect( xml ).toInclude( "<priority>0.5</priority>" );
 				} );
 
+				it( "emits a full W3C timestamp when lastModFormat is datetime", function(){
+					// A real date object carries a time-of-day. In datetime mode the
+					// <lastmod> keeps it and appends the server's local offset, e.g.
+					// 2026-03-05T14:30:00+00:00.
+					var when = createDateTime( 2026, 3, 5, 14, 30, 0 );
+					var xml  = variables.generator.generate(
+						pages         = { "http://example.test/a.cfm" : { lastModified : when, priority : 0.5 } },
+						lastModFormat = "datetime"
+					);
+					// Match the W3C datetime shape without hard-coding the offset,
+					// which depends on the test server's timezone.
+					expect( xml ).toMatch( "<lastmod>2026-03-05T14:30:00[+-]\d\d:\d\d</lastmod>" );
+				} );
+
+				it( "formats a plain date string in datetime mode as midnight", function(){
+					// The generator also receives date strings (e.g. from tests). A
+					// date-only string has no time, so it renders at 00:00:00.
+					var xml = variables.generator.generate(
+						pages         = { "http://example.test/a.cfm" : { lastModified : "2026-07-20", priority : 0.5 } },
+						lastModFormat = "datetime"
+					);
+					expect( xml ).toMatch( "<lastmod>2026-07-20T00:00:00[+-]\d\d:\d\d</lastmod>" );
+				} );
+
+				it( "still emits date-only lastmod by default", function(){
+					// Default (no lastModFormat) keeps the date-only W3C form.
+					var xml = variables.generator.generate( {
+						"http://example.test/a.cfm" : { lastModified : "2026-07-20", priority : 0.5 }
+					} );
+					expect( xml ).toInclude( "<lastmod>2026-07-20</lastmod>" );
+					expect( xml ).notToMatch( "T\d\d:\d\d:\d\d" );
+				} );
+
+				it( "adds the image namespace and <image:image> entries when includeImages is on", function(){
+					var pages = {
+						"http://example.test/a.cfm" : {
+							lastModified : "",
+							priority     : 0.5,
+							images       : [ "http://example.test/img/1.jpg", "http://cdn.other/2.png" ]
+						}
+					};
+					var xml = variables.generator.generate( pages = pages, includeImages = true );
+
+					expect( xml ).toInclude( 'xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"' );
+					expect( xml ).toInclude( "<image:image><image:loc>http://example.test/img/1.jpg</image:loc></image:image>" );
+					expect( xml ).toInclude( "<image:loc>http://cdn.other/2.png</image:loc>" );
+					// Valid XML with the namespace declared.
+					var doc = xmlParse( xml );
+					expect( doc.xmlRoot.xmlName ).toBe( "urlset" );
+				} );
+
+				it( "leaves images out and keeps output byte-identical when includeImages is off", function(){
+					// A page that happens to carry an images array must produce the
+					// exact same XML as one without it when includeImages is off.
+					var withImages = variables.generator.generate( {
+						"http://example.test/a.cfm" : { lastModified : "", priority : 0.5, images : [ "http://example.test/x.jpg" ] }
+					} );
+					var withoutImages = variables.generator.generate( {
+						"http://example.test/a.cfm" : { lastModified : "", priority : 0.5 }
+					} );
+					expect( withImages ).toBe( withoutImages );
+					expect( withImages.findNoCase( "image:" ) ).toBe( 0 );
+				} );
+
 			} );
 
 			describe( "generateSet()", function(){
@@ -231,6 +295,30 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					expect( out.xml ).toInclude( "<lastmod>2026-03-25</lastmod>" );
 				} );
 
+				it( "gives child filenames and index <loc> a .gz suffix when gzip is on", function(){
+					var pages = {
+						"http://example.test/1.cfm" : { lastModified : "", priority : 0.5 },
+						"http://example.test/2.cfm" : { lastModified : "", priority : 0.5 },
+						"http://example.test/3.cfm" : { lastModified : "", priority : 0.5 }
+					};
+
+					var out = variables.generator.generateSet(
+						pages         = pages,
+						publicBaseUrl = "https://example.test/",
+						maxUrls       = 2,
+						gzip          = true
+					);
+
+					// Child names carry .gz after the .xml extension...
+					expect( out.sitemaps[ 1 ].filename ).toBe( "sitemap-1.xml.gz" );
+					expect( out.sitemaps[ 2 ].filename ).toBe( "sitemap-2.xml.gz" );
+					// ...and the index <loc> references the same .gz names.
+					expect( out.xml ).toInclude( "<loc>https://example.test/sitemap-1.xml.gz</loc>" );
+					// The child xml itself stays uncompressed text and parses.
+					var childDoc = xmlParse( out.sitemaps[ 1 ].xml );
+					expect( childDoc.xmlRoot.xmlName ).toBe( "urlset" );
+				} );
+
 			} );
 
 			describe( "saveToFile()", function(){
@@ -259,6 +347,24 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 					expect( fileExists( target ) ).toBeTrue();
 					expect( fileRead( target ) ).toBe( xml );
+				} );
+
+				it( "writes gzip-compressed bytes that gunzip back to the exact XML", function(){
+					var xml = variables.generator.generate( {
+						"http://example.test/a.cfm" : { lastModified : "", priority : 0.5 }
+					} );
+					variables.tempFile = getTempDirectory() & "sitemap-generator-spec-" & getTickCount() & ".xml.gz";
+
+					variables.generator.saveToFile( xml, variables.tempFile, true );
+
+					expect( fileExists( variables.tempFile ) ).toBeTrue();
+					// Gunzip the file and confirm it matches the original XML.
+					var fis  = createObject( "java", "java.io.FileInputStream" ).init( variables.tempFile );
+					var gzis = createObject( "java", "java.util.zip.GZIPInputStream" ).init( fis );
+					var bytes = gzis.readAllBytes();
+					gzis.close();
+					var roundTripped = charsetEncode( bytes, "utf-8" );
+					expect( roundTripped ).toBe( xml );
 				} );
 
 			} );

@@ -362,6 +362,7 @@ component accessors=true hint="Handles crawling of website URLs" {
         var canonicalUrl = "";
         var links = [];
         var lastModified = "";
+        var images = []; // filled from the parsed page only when includeImages is on
         var priority = getPriority( depth );
 
         // jsoup follows HTTP 30x, so fetchResult.url is the final URL and may
@@ -390,6 +391,13 @@ component accessors=true hint="Handles crawling of website URLs" {
             }
             // determine the last modified date
             lastModified = parser.getLastModified( fetchResult, parsedPage );
+
+            // collect the page's images for an image sitemap, only when the
+            // includeImages setting is on (otherwise the page struct stays
+            // image-free and the output is unchanged).
+            if ( settings.includeImages ) {
+                images = parser.getImages( parsedPage );
+            }
 
             logger.info( "Parsed HTML content. Canonical URL: #canonicalUrl#, Links found: #links.len()#" );
 
@@ -439,7 +447,8 @@ component accessors=true hint="Handles crawling of website URLs" {
                 ? lastModified
                 : ( settings.lastModFallback == "crawlTime" ? now() : "" ),
             priority = priority,
-            depth = depth
+            depth = depth,
+            images = images
         );
 
         // loop through the links and enqueue. enqueueDecision returns "" to enqueue
@@ -500,6 +509,8 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @lastModified A date object, or "" when unknown
      * @priority The page priority
      * @depth The crawl depth the page was found at
+     * @images Array of absolute image URLs for the page (empty unless the
+     *   includeImages setting is on)
      *
      * Sync mode: stores the page directly. The maxPages cutoff is already applied
      * by atMaxPages() at the top of crawlUrl, so the count stays exact.
@@ -514,12 +525,14 @@ component accessors=true hint="Handles crawling of website URLs" {
         required string url,
         required any lastModified, // a date object, or "" when unknown
         required numeric priority,
-        required numeric depth
+        required numeric depth,
+        array images = []
     ) {
         var page = {
             "lastModified": arguments.lastModified,
             "priority": arguments.priority,
-            "depth": arguments.depth
+            "depth": arguments.depth,
+            "images": arguments.images
         };
 
         if ( variables.async ) {

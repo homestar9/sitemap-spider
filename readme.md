@@ -93,7 +93,8 @@ Each entry in `pages` looks like:
 "https://example.com/about/" = {
     lastModified : "2026-07-01",  // date-only, or empty when unknown (see lastModFallback)
     priority     : 0.9,           // 1.0 at the start URL, reduced by depth
-    depth        : 1              // link distance from the start URL
+    depth        : 1,             // link distance from the start URL
+    images       : []             // page image URLs, filled only when includeImages is on
 }
 ```
 
@@ -116,6 +117,9 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `priorityDecrement` | `0.1` | How much `<priority>` drops per level of depth. |
 | `maxUrlsPerSitemap` | `50000` | sitemaps.org per-file URL limit. Above this the output splits into a sitemap index. |
 | `maxSitemapBytes` | `52428800` | sitemaps.org per-file byte limit (50 MiB, uncompressed). Above this the output splits. |
+| `gzipOutput` | `false` | When true and a `filePath` is given, the sitemap files are written gzip-compressed with a `.gz` suffix (e.g. `sitemap.xml.gz`). Child files and the `<sitemapindex>` `<loc>` entries carry `.gz` too. See the note below on serving `.gz`. |
+| `lastModFormat` | `"date"` | Format of `<lastmod>`: `"date"` writes the date-only form (`YYYY-MM-DD`); `"datetime"` writes the full W3C timestamp (`YYYY-MM-DDThh:mm:ss+HH:MM`) in the server's local timezone. |
+| `includeImages` | `false` | When true, each page's `<img src>` images are emitted as `<image:image>` entries and the `<urlset>` gains the image namespace. Images are not host-filtered (CDN images are kept), capped at 1000 per page. |
 | `lastModFallback` | `"omit"` | What `<lastmod>` does when a page has no parseable Last-Modified: `"omit"` leaves it out; `"crawlTime"` records the crawl timestamp. |
 | `requestTimeout` | `10000` | Per-request timeout in milliseconds. |
 | `maxBodySize` | `5242880` | Cap (bytes) on the response body a fetch downloads (5 MB). |
@@ -195,6 +199,18 @@ sees links and content that JavaScript adds after load. It needs some setup:
 - **`publicBaseUrl`** is the absolute URL prefix the child sitemaps are served
   from, used for the `<sitemapindex>` `<loc>` entries. When omitted, it is
   derived from the first start URL's directory.
+- **Gzip** (`gzipOutput = true`) writes each file compressed with a `.gz` name.
+  Your web server must serve these `.gz` files with the `Content-Encoding: gzip`
+  header (or as an already-gzipped body a crawler will decompress) — otherwise a
+  search engine fetching the URL sees raw binary. The module writes the files; it
+  does not configure your server.
+- **Full timestamps** (`lastModFormat = "datetime"`) write
+  `YYYY-MM-DDThh:mm:ss+HH:MM` in the server's local timezone. A page whose date is
+  known only to the day (no time) renders at midnight local (`T00:00:00`).
+- **Image sitemaps** (`includeImages = true`) add `<image:image>` entries per
+  page from its `<img src>` tags, plus the
+  `xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"` namespace on
+  the `<urlset>`.
 
 ## License
 

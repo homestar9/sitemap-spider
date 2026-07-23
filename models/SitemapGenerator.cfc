@@ -17,14 +17,23 @@ component {
      * Generate a single <urlset> XML sitemap for the given pages. Callers with a
      * page count/size that may exceed the sitemaps.org limits should use
      * generateSet(), which splits into child sitemaps plus an index.
-     * todo: make sure it can handle images too
      *
      * @pages (required struct) pages to generate the sitemap for
+     * @lastModFormat "date" for date-only <lastmod> (default), "datetime" for the
+     *   full W3C timestamp. See formatLastMod.
+     * @includeImages when true, each page's images array is emitted as
+     *   <image:image> entries and the <urlset> gains the image namespace. Must
+     *   match the value used to build the page structs; false keeps the output
+     *   byte-identical to the pre-image behavior.
      */
-    function generate( required struct pages ) {
-        var xml = variables.xmlHeader & variables.urlsetOpen;
+    function generate(
+        required struct pages,
+        string lastModFormat = "date",
+        boolean includeImages = false
+    ) {
+        var xml = variables.xmlHeader & urlsetOpenTag( arguments.includeImages );
         pages.each( ( pageUrl, data ) => {
-            xml &= buildUrlEntry( pageUrl, data );
+            xml &= buildUrlEntry( pageUrl, data, lastModFormat, includeImages );
         } );
         xml &= variables.urlsetClose;
         return xml;
@@ -52,17 +61,31 @@ component {
      * @primaryFilename the index/single filename; children insert "-N" before its extension
      * @maxUrls per-file URL-count limit (sitemaps.org caps this at 50000)
      * @maxBytes per-file uncompressed byte limit (sitemaps.org caps this at 50 MiB)
+     * @gzip when true, child filenames and the index <loc> entries get a ".gz"
+     *   suffix (e.g. "sitemap-1.xml.gz"), because the caller writes the child
+     *   files gzip-compressed. The child xml strings stay uncompressed text.
+     * @lastModFormat "date" (default) or "datetime"; passed through to each entry
+     *   and used for the index <lastmod>. See formatLastMod.
+     * @includeImages passed through to each entry and used for the <urlset>
+     *   envelope tag and byte accounting. See generate.
      */
     function generateSet(
         required struct pages,
         string publicBaseUrl = "",
         string primaryFilename = "sitemap.xml",
         numeric maxUrls = 50000,
-        numeric maxBytes = 52428800
+        numeric maxBytes = 52428800,
+        boolean gzip = false,
+        string lastModFormat = "date",
+        boolean includeImages = false
     ) {
+        // The <urlset> envelope for this set, chosen once so every chunk and the
+        // byte accounting below use the same open tag.
+        var urlsetOpen = urlsetOpenTag( arguments.includeImages );
+
         // Byte size of an empty <urlset> file. Seeded into each chunk's running
         // total so the size check counts the envelope, not just the entries.
-        var envelopeBytes = byteLength( variables.xmlHeader & variables.urlsetOpen & variables.urlsetClose );
+        var envelopeBytes = byteLength( variables.xmlHeader & urlsetOpen & variables.urlsetClose );
 
         // Each chunk is { builder, count, bytes, lastMod }. builder holds the
         // <url> entries; count/bytes drive the split; lastMod is the newest page
@@ -72,7 +95,7 @@ component {
 
         for ( var pageUrl in arguments.pages ) {
             var data       = arguments.pages[ pageUrl ];
-            var entry      = buildUrlEntry( pageUrl, data );
+            var entry      = buildUrlEntry( pageUrl, data, arguments.lastModFormat, arguments.includeImages );
             var entryBytes = byteLength( entry );
 
             // Roll to a new chunk only when the current one already holds an
@@ -107,7 +130,7 @@ component {
             var body = chunks.len() ? chunks[ 1 ].builder.toString() : "";
             return {
                 type     : "single",
-                xml      : variables.xmlHeader & variables.urlsetOpen & body & variables.urlsetClose,
+                xml      : variables.xmlHeader & urlsetOpen & body & variables.urlsetClose,
                 sitemaps : []
             };
         }
@@ -116,10 +139,15 @@ component {
         var sitemaps  = [];
         var indexBody = "";
         for ( var i = 1; i <= chunks.len(); i++ ) {
+            // childFilename builds "sitemap-N.xml"; the ".gz" is appended after so
+            // childFilename's single-extension logic is never fed "sitemap.xml.gz".
             var filename  = childFilename( arguments.primaryFilename, i );
-            var childXml  = variables.xmlHeader & variables.urlsetOpen & chunks[ i ].builder.toString() & variables.urlsetClose;
+            if ( arguments.gzip ) {
+                filename &= ".gz";
+            }
+            var childXml  = variables.xmlHeader & urlsetOpen & chunks[ i ].builder.toString() & variables.urlsetClose;
             var hasDate   = isDate( chunks[ i ].lastMod );
-            var lastModStr = hasDate ? dateFormat( chunks[ i ].lastMod, "yyyy-mm-dd" ) : "";
+            var lastModStr = hasDate ? formatLastMod( chunks[ i ].lastMod, arguments.lastModFormat ) : "";
 
             indexBody &= '<sitemap>';
             indexBody &= '<loc>#xmlFormat( arguments.publicBaseUrl & filename )#</loc>';
@@ -149,23 +177,87 @@ component {
      * generateSet() so both emit identical entries.
      *
      * @url the page URL (used as the <loc>)
-     * @data the page struct with lastModified and priority keys
+     * @data the page struct with lastModified and priority keys (and images when
+     *   includeImages is on)
+     * @lastModFormat "date" or "datetime" for the <lastmod> element
+     * @includeImages when true, emit an <image:image> for each URL in data.images
      */
-    private string function buildUrlEntry( required string url, required struct data ) {
+    private string function buildUrlEntry(
+        required string url,
+        required struct data,
+        string lastModFormat = "date",
+        boolean includeImages = false
+    ) {
         var entry = '<url>';
         entry &= '<loc>#xmlFormat( arguments.url )#</loc>';
-        // The sitemaps.org protocol requires W3C datetime for <lastmod>.
-        // Emit the date-only form (YYYY-MM-DD), the shortest valid W3C form,
-        // and only when a real date was recorded. dateFormat (not
-        // dateTimeFormat) is used so the "mm" mask means month on every
-        // engine; dateTimeFormat's "mm" means minutes on some engines.
+        // The sitemaps.org protocol requires W3C datetime for <lastmod>. Emit it
+        // only when a real date was recorded; formatLastMod picks date-only or the
+        // full timestamp based on lastModFormat.
         if ( isDate( arguments.data.lastModified ) ) {
-            entry &= '<lastmod>#dateFormat( arguments.data.lastModified, "yyyy-mm-dd" )#</lastmod>';
+            entry &= '<lastmod>#formatLastMod( arguments.data.lastModified, arguments.lastModFormat )#</lastmod>';
         }
         // Priority is a value from 0.0 to 1.0; render one decimal place.
         entry &= '<priority>#numberFormat( arguments.data.priority, "0.0" )#</priority>';
+        // Image-extension entries come after the core sitemaps.org sequence
+        // (loc, lastmod, priority), so the core element order stays valid. Guard
+        // on the images key because callers may build page structs without it.
+        if ( arguments.includeImages && arguments.data.keyExists( "images" ) ) {
+            for ( var img in arguments.data.images ) {
+                entry &= '<image:image><image:loc>#xmlFormat( img )#</image:loc></image:image>';
+            }
+        }
         entry &= '</url>';
         return entry;
+    }
+
+    /**
+     * urlsetOpenTag
+     * Return the opening <urlset> tag. The image-extension namespace is added
+     * only when includeImages is true, so a normal crawl's output stays
+     * byte-for-byte the same as before this feature existed.
+     *
+     * @includeImages whether the sitemap emits <image:image> entries
+     */
+    private string function urlsetOpenTag( required boolean includeImages ) {
+        return arguments.includeImages
+            ? '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">'
+            : variables.urlsetOpen;
+    }
+
+    /**
+     * formatLastMod
+     * Format a last-modified date for the <lastmod> element.
+     *
+     * @value a date object, or a date string like "2026-07-20"
+     * @lastModFormat "date" for the date-only W3C form (YYYY-MM-DD), or "datetime"
+     *   for the full W3C timestamp (YYYY-MM-DDThh:mm:ss+HH:MM).
+     *
+     * The date-only path uses dateFormat (not dateTimeFormat) so the "mm" mask
+     * means month on every engine. The datetime path builds a java.time value
+     * from CFML date-part functions (year/month/day/hour/minute/second), which
+     * accept both a date object and a plain date string on Adobe, Lucee, and
+     * BoxLang. It avoids date.getTime() because BoxLang's date type is not a
+     * java.util.Date subclass. The offset is the server's local timezone (the
+     * same zone the date-only form is rendered in), computed DST-correct for the
+     * given date. Pattern letter lowercase "xxx" renders a zero offset as
+     * "+00:00"; uppercase "XXX" would render it as "Z".
+     */
+    private string function formatLastMod( required any value, required string lastModFormat ) {
+        if ( arguments.lastModFormat != "datetime" ) {
+            return dateFormat( arguments.value, "yyyy-mm-dd" );
+        }
+        var ldt = createObject( "java", "java.time.LocalDateTime" ).of(
+            javaCast( "int", year( arguments.value ) ),
+            javaCast( "int", month( arguments.value ) ),
+            javaCast( "int", day( arguments.value ) ),
+            javaCast( "int", hour( arguments.value ) ),
+            javaCast( "int", minute( arguments.value ) ),
+            javaCast( "int", second( arguments.value ) )
+        );
+        var zone = createObject( "java", "java.time.ZoneId" ).systemDefault();
+        var fmt  = createObject( "java", "java.time.format.DateTimeFormatter" )
+            .ofPattern( javaCast( "string", "yyyy-MM-dd'T'HH:mm:ssxxx" ) );
+        return ldt.atZone( zone ).toOffsetDateTime().format( fmt );
     }
 
     /**
@@ -202,14 +294,30 @@ component {
      * does not already exist.
      * @xml The sitemap XML string to write.
      * @path The full file path to write to.
+     * @gzip When true, the XML is gzip-compressed before it is written. The
+     *   caller is responsible for giving @path a ".gz" name.
+     *
+     * The gzip path compresses into an in-memory buffer, then reuses the same
+     * fileWrite as the plain path. charsetDecode returns a UTF-8 byte array on
+     * every engine, and GZIPOutputStream.finish() must run before the buffer is
+     * read so the gzip trailer is included.
      */
-    function saveToFile( required string xml, required string path ) {
+    function saveToFile( required string xml, required string path, boolean gzip = false ) {
         var dir = getDirectoryFromPath( arguments.path );
         if ( len( dir ) && !directoryExists( dir ) ) {
             // Java's File.mkdirs() creates any missing intermediate directories
             // and is used here because CFML's directoryCreate() signature differs
             // across engines (Adobe's takes only the path).
             createObject( "java", "java.io.File" ).init( javaCast( "string", dir ) ).mkdirs();
+        }
+        if ( arguments.gzip ) {
+            var baos = createObject( "java", "java.io.ByteArrayOutputStream" ).init();
+            var gz   = createObject( "java", "java.util.zip.GZIPOutputStream" ).init( baos );
+            gz.write( charsetDecode( arguments.xml, "utf-8" ) );
+            gz.finish();
+            gz.close();
+            fileWrite( arguments.path, baos.toByteArray() );
+            return;
         }
         fileWrite( arguments.path, arguments.xml );
     }

@@ -276,6 +276,39 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
+		describe( "image sitemap via create()", function(){
+
+			it( "records page images and emits <image:image> when includeImages is on", function(){
+				// index.cfm carries an <img src="./assets/img/sample.jpg">. With
+				// includeImages on, that image is collected on the page struct and
+				// the sitemap XML emits an <image:image> entry with the image
+				// namespace. The setting is the shared module-settings struct, so it
+				// is restored in the finally to avoid leaking into other specs.
+				var settings = getInstance( "coldbox:moduleSettings:sitemap-spider" );
+				var original = settings.includeImages;
+				try {
+					settings.includeImages = true;
+
+					var result = getInstance( "sitemapService@sitemap-spider" )
+						.create( variables.appRoot );
+
+					// The index page carries the sample image on its page struct.
+					var indexImages = result.pages[ variables.appRoot ].images;
+					expect( indexImages ).toBeArray();
+					expect( indexImages ).toInclude( variables.appRoot & "assets/img/sample.jpg" );
+
+					// The sitemap XML declares the image namespace and the entry.
+					expect( result.sitemap ).toInclude( "xmlns:image=" );
+					expect( result.sitemap ).toInclude(
+						"<image:loc>" & variables.appRoot & "assets/img/sample.jpg</image:loc>"
+					);
+				} finally {
+					settings.includeImages = original;
+				}
+			} );
+
+		} );
+
 		describe( "async parallel crawl", function(){
 
 			// The shared beforeAll crawl (variables.result) is synchronous. Crawl
