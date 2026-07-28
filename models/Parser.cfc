@@ -157,15 +157,21 @@ component accessors=true hint="Parses HTML content to extract links and metadata
      * @page The jSoup document. It must have been parsed with a base URI (see
      *   parseHtml) or carry a <base href> tag, so relative URLs resolve.
      *
-     * Returns an array of structs, each with all five keys:
-     *   { title, description, thumbnailLoc, contentLoc, playerLoc }
+     * Returns an array of structs, each with all six keys:
+     *   { title, description, thumbnailLoc, contentLoc, playerLoc, duration }
      *
-     * Two sources are read, in order:
-     *   1. Open Graph meta tags (at most one video per page). The player URL is
+     * Three sources are read, in this order:
+     *   1. JSON-LD VideoObject entries in <script type="application/ld+json">
+     *      blocks. name/description/thumbnailUrl/contentUrl/embedUrl/duration
+     *      map to the six keys. Read first on purpose: a VideoObject describes
+     *      one specific video, so its title and description beat the
+     *      page-level text the other two sources fall back to, and it is the
+     *      only source that can supply both a media URL and a player URL.
+     *   2. Open Graph meta tags (at most one video per page). The player URL is
      *      the first non-empty of og:video:secure_url, og:video:url, og:video,
      *      and becomes playerLoc — OG video URLs are embed/player pages, and
      *      Google requires content_loc to be an actual media file.
-     *   2. <video> elements, in document order. The media URL comes from the
+     *   3. <video> elements, in document order. The media URL comes from the
      *      src attribute, or the first <source src> child when src is absent,
      *      and becomes contentLoc. The poster attribute is the thumbnail.
      *
@@ -176,9 +182,11 @@ component accessors=true hint="Parses HTML content to extract links and metadata
      * Google requires a thumbnail, title, description, and a content or player
      * URL per video. A candidate still missing any of those after the fallbacks
      * is dropped silently — the SitemapGenerator never validates. Duplicates
-     * (same media/player URL, e.g. OG tags and a <video> tag pointing at the
-     * same file) are emitted once, first occurrence wins. Capped at 100 videos
-     * per page as a defensive limit.
+     * are emitted once and the first occurrence wins, which is why JSON-LD is
+     * collected first. A candidate is a duplicate when either of its URLs was
+     * already used by an earlier one, so a JSON-LD entry carrying both a
+     * contentUrl and an embedUrl also swallows a later og:video naming that
+     * same embed URL. Capped at 100 videos per page as a defensive limit.
      */
     array function getVideos( required any page ) {
         var baseUri = arguments.page.baseUri();
@@ -200,7 +208,24 @@ component accessors=true hint="Parses HTML content to extract links and metadata
         // append logic lives in one place.
         var candidates = [ ];
 
-        // Source 1: Open Graph. secure_url is preferred per the OG spec's own
+        // Source 1: JSON-LD VideoObject entries. Each one carries its own
+        // title, description and thumbnail, so the page-level values are only
+        // a fallback here.
+        for ( var videoObject in jsonLdVideoObjects( arguments.page ) ) {
+            var jsonLdTitle = jsonLdString( videoObject, "name" );
+            var jsonLdDescription = jsonLdString( videoObject, "description" );
+            var jsonLdThumbnail = resolveAgainstBase( jsonLdUrl( videoObject, "thumbnailUrl" ), baseUri );
+            candidates.append( {
+                "title": len( jsonLdTitle ) ? jsonLdTitle : pageTitle,
+                "description": len( jsonLdDescription ) ? jsonLdDescription : pageDescription,
+                "thumbnailLoc": len( jsonLdThumbnail ) ? jsonLdThumbnail : pageThumbnail,
+                "contentLoc": resolveAgainstBase( jsonLdUrl( videoObject, "contentUrl" ), baseUri ),
+                "playerLoc": resolveAgainstBase( jsonLdUrl( videoObject, "embedUrl" ), baseUri ),
+                "duration": iso8601Seconds( jsonLdString( videoObject, "duration" ) )
+            } );
+        }
+
+        // Source 2: Open Graph. secure_url is preferred per the OG spec's own
         // ordering; plain og:video is the common shorthand.
         var ogUrl = metaContent( arguments.page, "meta[property=og:video:secure_url]" );
         if ( !len( ogUrl ) ) {
@@ -216,11 +241,12 @@ component accessors=true hint="Parses HTML content to extract links and metadata
                 "description": pageDescription,
                 "thumbnailLoc": pageThumbnail,
                 "contentLoc": "",
-                "playerLoc": ogUrl
+                "playerLoc": ogUrl,
+                "duration": 0
             } );
         }
 
-        // Source 2: <video> elements. HTML has no per-element title or
+        // Source 3: <video> elements. HTML has no per-element title or
         // description, so those always come from the page-level fallbacks.
         for ( var element in arguments.page.select( "video" ) ) {
             // The media file: the element's own src, else its first
@@ -246,19 +272,28 @@ component accessors=true hint="Parses HTML content to extract links and metadata
                 "description": pageDescription,
                 "thumbnailLoc": thumbnail,
                 "contentLoc": contentLoc,
-                "playerLoc": ""
+                "playerLoc": "",
+                "duration": 0
             } );
         }
 
-        // Validate, dedupe, and cap. Dedupe is keyed on the media/player URL so
-        // an OG tag and a <video> tag pointing at the same file emit once (the
-        // OG entry wins because it was collected first).
+        // Validate, dedupe, and cap. A candidate is deduped on every URL it
+        // has, not just one, because a JSON-LD entry can name a media file and
+        // a player page while a later og:video names only that same player
+        // page. Earlier candidates win, so JSON-LD beats Open Graph and Open
+        // Graph beats a <video> tag.
         var videos = [ ];
         var seen   = { };
         for ( var candidate in candidates ) {
-            var primaryUrl = len( candidate.contentLoc ) ? candidate.contentLoc : candidate.playerLoc;
+            var candidateUrls = [ ];
+            if ( len( candidate.contentLoc ) ) {
+                candidateUrls.append( candidate.contentLoc );
+            }
+            if ( len( candidate.playerLoc ) ) {
+                candidateUrls.append( candidate.playerLoc );
+            }
             if (
-                !len( primaryUrl )
+                !candidateUrls.len()
                 || !len( candidate.thumbnailLoc )
                 || !len( candidate.title )
                 || !len( candidate.description )
@@ -266,10 +301,19 @@ component accessors=true hint="Parses HTML content to extract links and metadata
                 logger.debug( "Dropping incomplete video candidate on #baseUri#" );
                 continue;
             }
-            if ( seen.keyExists( primaryUrl ) || videos.len() >= 100 ) {
+            var isDuplicate = false;
+            for ( var candidateUrl in candidateUrls ) {
+                if ( seen.keyExists( candidateUrl ) ) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            if ( isDuplicate || videos.len() >= 100 ) {
                 continue; // duplicate on this page, or past the defensive cap
             }
-            seen[ primaryUrl ] = true;
+            for ( var candidateUrl in candidateUrls ) {
+                seen[ candidateUrl ] = true;
+            }
             videos.append( candidate );
         }
         return videos;
@@ -311,6 +355,195 @@ component accessors=true hint="Parses HTML content to extract links and metadata
         } catch ( any e ) {
             return "";
         }
+    }
+
+    /**
+     * Returns every schema.org VideoObject found in the page's
+     * <script type="application/ld+json"> blocks, as raw deserialized structs.
+     *
+     * A block that is not valid JSON is skipped without throwing, because a
+     * broken JSON-LD block on one page must not fail the whole crawl. Script
+     * content is read with jsoup's data() rather than text(), because text()
+     * returns nothing for a <script> element.
+     */
+    private array function jsonLdVideoObjects( required any page ) {
+        var found = [ ];
+        for ( var block in arguments.page.select( "script[type=application/ld+json]" ) ) {
+            var raw = trim( block.data() );
+            if ( !len( raw ) || !isJSON( raw ) ) {
+                continue;
+            }
+            try {
+                collectVideoObjects( deserializeJSON( raw ), found, 0 );
+            } catch ( any e ) {
+                // isJSON said yes but the engine could not build a value from
+                // it. Same treatment as malformed: skip this block only.
+                logger.debug( "Skipping unreadable JSON-LD block: #e.message#" );
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Walks a deserialized JSON-LD value and appends every VideoObject struct
+     * it finds to the found array.
+     *
+     * One recursive walk covers all the shapes real pages use: a single
+     * object, a top-level array of them, entries under "@graph", and a
+     * VideoObject nested inside another type (a WebPage's "video" property, or
+     * a VideoObject's own "hasPart"). It keeps descending into a VideoObject's
+     * keys for that last case. Depth and count are capped so a deeply nested
+     * or huge block cannot stall the crawl.
+     */
+    private void function collectVideoObjects( required any node, required array found, numeric depth = 0 ) {
+        if ( arguments.depth > 10 || arguments.found.len() >= 100 ) {
+            return;
+        }
+        if ( isArray( arguments.node ) ) {
+            for ( var item in arguments.node ) {
+                collectVideoObjects( item, arguments.found, arguments.depth + 1 );
+            }
+            return;
+        }
+        if ( !isStruct( arguments.node ) ) {
+            return;
+        }
+        if ( isVideoObject( arguments.node ) ) {
+            arguments.found.append( arguments.node );
+        }
+        for ( var key in arguments.node ) {
+            collectVideoObjects( arguments.node[ key ], arguments.found, arguments.depth + 1 );
+        }
+    }
+
+    /**
+     * True when a JSON-LD struct's "@type" says it is a VideoObject.
+     *
+     * @type can be a single string or an array of them. Only the last
+     * "/"-delimited segment is compared, so the full IRI form
+     * "http://schema.org/VideoObject" counts too. CFML's == compares strings
+     * case-insensitively, which is what we want here.
+     */
+    private boolean function isVideoObject( required struct node ) {
+        if ( !arguments.node.keyExists( "@type" ) ) {
+            return false;
+        }
+        var rawType = arguments.node[ "@type" ];
+        var types = isArray( rawType ) ? rawType : [ rawType ];
+        for ( var type in types ) {
+            if ( isSimpleValue( type ) && listLast( trim( type ), "/" ) == "VideoObject" ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns a JSON-LD struct's value for a key as a trimmed string, or ""
+     * when the key is missing or holds something that is not a simple value.
+     */
+    private string function jsonLdString( required struct node, required string key ) {
+        if ( !arguments.node.keyExists( arguments.key ) ) {
+            return "";
+        }
+        var value = arguments.node[ arguments.key ];
+        return isSimpleValue( value ) ? trim( value ) : "";
+    }
+
+    /**
+     * Returns the first usable URL held under a JSON-LD key, or "".
+     *
+     * The value can be a plain string, an array (thumbnailUrl is commonly an
+     * array of sizes — the first one wins), or a nested object such as an
+     * ImageObject, where the URL sits under "url" or "contentUrl".
+     */
+    private string function jsonLdUrl( required struct node, required string key ) {
+        if ( !arguments.node.keyExists( arguments.key ) ) {
+            return "";
+        }
+        return firstUrlValue( arguments.node[ arguments.key ] );
+    }
+
+    /**
+     * Pulls a URL string out of a JSON-LD value that may be a string, an array,
+     * or a nested object. Returns "" when there is nothing usable.
+     */
+    private string function firstUrlValue( required any value ) {
+        if ( isSimpleValue( arguments.value ) ) {
+            return trim( arguments.value );
+        }
+        if ( isArray( arguments.value ) ) {
+            for ( var item in arguments.value ) {
+                var itemUrl = firstUrlValue( item );
+                if ( len( itemUrl ) ) {
+                    return itemUrl;
+                }
+            }
+            return "";
+        }
+        if ( isStruct( arguments.value ) ) {
+            for ( var urlKey in [ "url", "contentUrl", "@id" ] ) {
+                if ( arguments.value.keyExists( urlKey ) && isSimpleValue( arguments.value[ urlKey ] ) ) {
+                    return trim( arguments.value[ urlKey ] );
+                }
+            }
+        }
+        return "";
+    }
+
+    /**
+     * Converts an ISO 8601 duration such as "PT1M33S" to whole seconds.
+     *
+     * Returns 0 when the value cannot be read or falls outside the 1–28800
+     * second range Google's video sitemap schema allows, so the generator can
+     * emit <video:duration> whenever this is above zero and never has to
+     * validate. A plain number is accepted as seconds, because some sites
+     * write duration that way.
+     *
+     * The value is split at "T" before any digits are read, because "M" means
+     * months in the date half and minutes in the time half. Only day, hour,
+     * minute and second parts are supported; a months or years part returns 0
+     * rather than guessing how long a month is. Written with reMatchNoCase
+     * instead of one big pattern so it behaves the same on Lucee, Adobe
+     * ColdFusion and BoxLang.
+     */
+    private numeric function iso8601Seconds( required string raw ) {
+        var value = trim( arguments.raw );
+        if ( !len( value ) ) {
+            return 0;
+        }
+        var seconds = 0;
+        if ( isNumeric( value ) ) {
+            seconds = int( value );
+        } else if ( left( value, 1 ) == "P" ) {
+            var body = mid( value, 2, len( value ) - 1 );
+            var timeStart = body.findNoCase( "T" );
+            var datePart = timeStart ? ( timeStart > 1 ? left( body, timeStart - 1 ) : "" ) : body;
+            var timePart = timeStart ? mid( body, timeStart + 1, len( body ) ) : "";
+            // A months or years part has no fixed length in seconds.
+            if ( reFindNoCase( "[0-9][YM]", datePart ) ) {
+                return 0;
+            }
+            for ( var part in reMatchNoCase( "[0-9]+(\.[0-9]+)?[DW]", datePart ) ) {
+                var dayCount = val( part );
+                seconds += right( part, 1 ) == "W" ? dayCount * 604800 : dayCount * 86400;
+            }
+            for ( var part in reMatchNoCase( "[0-9]+(\.[0-9]+)?[HMS]", timePart ) ) {
+                var unitCount = val( part );
+                switch ( uCase( right( part, 1 ) ) ) {
+                    case "H":
+                        seconds += unitCount * 3600;
+                        break;
+                    case "M":
+                        seconds += unitCount * 60;
+                        break;
+                    default:
+                        seconds += unitCount;
+                }
+            }
+            seconds = int( seconds );
+        }
+        return ( seconds >= 1 && seconds <= 28800 ) ? seconds : 0;
     }
 
     /**

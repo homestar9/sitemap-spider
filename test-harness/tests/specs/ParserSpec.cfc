@@ -641,6 +641,260 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					expect( videos[ 1 ].thumbnailLoc ).toBe( "http://example.test/sub/media/poster.jpg" );
 				} );
 
+				it( "sets duration to 0 for og:video and video tag sources", function(){
+					// Neither HTML source carries a duration, but every video
+					// struct has the key so the generator can read it safely.
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<meta name="description" content="D">'
+						& '<meta property="og:video" content="https://player.other/embed/1">'
+						& '<meta property="og:image" content="https://example.test/thumb.jpg">'
+						& '</head><body>'
+						& '<video src="clip.mp4" poster="poster.jpg"></video>'
+						& '</body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 2 );
+					expect( videos[ 1 ].duration ).toBe( 0 );
+					expect( videos[ 2 ].duration ).toBe( 0 );
+				} );
+
+				it( "reads a top-level JSON-LD VideoObject", function(){
+					var page = parseWithBase(
+						'<html><head><title>Page Title</title>'
+						& '<script type="application/ld+json">'
+						& '{ "@context": "https://schema.org", "@type": "VideoObject",'
+						& ' "name": "JSON-LD Clip", "description": "Described in JSON-LD.",'
+						& ' "thumbnailUrl": "https://example.test/jsonld-thumb.jpg",'
+						& ' "contentUrl": "https://example.test/jsonld.mp4",'
+						& ' "embedUrl": "https://player.other/embed/7" }'
+						& '</script>'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].title ).toBe( "JSON-LD Clip" );
+					expect( videos[ 1 ].description ).toBe( "Described in JSON-LD." );
+					expect( videos[ 1 ].thumbnailLoc ).toBe( "https://example.test/jsonld-thumb.jpg" );
+					expect( videos[ 1 ].contentLoc ).toBe( "https://example.test/jsonld.mp4" );
+					expect( videos[ 1 ].playerLoc ).toBe( "https://player.other/embed/7" );
+				} );
+
+				it( "reads a VideoObject nested inside a @graph array", function(){
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<script type="application/ld+json">'
+						& '{ "@context": "https://schema.org", "@graph": ['
+						& '{ "@type": "WebPage", "name": "Not a video" },'
+						& '{ "@type": "VideoObject", "name": "Graph Clip",'
+						& ' "description": "Inside a graph.",'
+						& ' "thumbnailUrl": "https://example.test/g-thumb.jpg",'
+						& ' "contentUrl": "https://example.test/graph.mp4" } ] }'
+						& '</script>'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].title ).toBe( "Graph Clip" );
+					expect( videos[ 1 ].contentLoc ).toBe( "https://example.test/graph.mp4" );
+				} );
+
+				it( "matches a VideoObject declared with the full schema.org IRI and an array type", function(){
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<script type="application/ld+json">'
+						& '{ "@type": [ "MediaObject", "http://schema.org/VideoObject" ],'
+						& ' "name": "IRI Clip", "description": "Full IRI type.",'
+						& ' "thumbnailUrl": "https://example.test/iri-thumb.jpg",'
+						& ' "contentUrl": "https://example.test/iri.mp4" }'
+						& '</script>'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].title ).toBe( "IRI Clip" );
+				} );
+
+				it( "skips a malformed JSON-LD block without throwing and still reads a valid one", function(){
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<script type="application/ld+json">{ "@type": "VideoObject", oops </script>'
+						& '<script type="application/ld+json">'
+						& '{ "@type": "VideoObject", "name": "Good Clip", "description": "Valid block.",'
+						& ' "thumbnailUrl": "https://example.test/ok-thumb.jpg",'
+						& ' "contentUrl": "https://example.test/ok.mp4" }'
+						& '</script>'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].title ).toBe( "Good Clip" );
+				} );
+
+				it( "takes the first entry when thumbnailUrl is an array and falls back to page text", function(){
+					// No name or description on the VideoObject, so the page
+					// <title> and meta description fill the required fields.
+					var page = parseWithBase(
+						'<html><head><title>Page Title</title>'
+						& '<meta name="description" content="Page description.">'
+						& '<script type="application/ld+json">'
+						& '{ "@type": "VideoObject",'
+						& ' "thumbnailUrl": [ "https://example.test/wide.jpg", "https://example.test/tall.jpg" ],'
+						& ' "contentUrl": "https://example.test/array.mp4" }'
+						& '</script>'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].thumbnailLoc ).toBe( "https://example.test/wide.jpg" );
+					expect( videos[ 1 ].title ).toBe( "Page Title" );
+					expect( videos[ 1 ].description ).toBe( "Page description." );
+				} );
+
+				it( "reads a thumbnail given as a nested ImageObject", function(){
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<meta name="description" content="D">'
+						& '<script type="application/ld+json">'
+						& '{ "@type": "VideoObject",'
+						& ' "thumbnailUrl": { "@type": "ImageObject", "url": "https://example.test/nested.jpg" },'
+						& ' "contentUrl": "https://example.test/nested.mp4" }'
+						& '</script>'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos[ 1 ].thumbnailLoc ).toBe( "https://example.test/nested.jpg" );
+				} );
+
+				it( "resolves relative JSON-LD URLs against the base URI", function(){
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<meta name="description" content="D">'
+						& '<script type="application/ld+json">'
+						& '{ "@type": "VideoObject", "thumbnailUrl": "thumb.jpg",'
+						& ' "contentUrl": "media/clip.mp4" }'
+						& '</script>'
+						& '</head><body></body></html>',
+						"http://example.test/sub/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos[ 1 ].contentLoc ).toBe( "http://example.test/sub/media/clip.mp4" );
+					expect( videos[ 1 ].thumbnailLoc ).toBe( "http://example.test/sub/thumb.jpg" );
+				} );
+
+				it( "converts an ISO 8601 duration to whole seconds", function(){
+					var durations = {
+						"PT1M33S" : 93,
+						"PT1H2M3S" : 3723,
+						"PT45S" : 45,
+						"P0DT2H" : 7200,
+						"90" : 90
+					};
+					for ( var raw in durations ) {
+						var page = parseWithBase(
+							'<html><head><title>T</title>'
+							& '<meta name="description" content="D">'
+							& '<script type="application/ld+json">'
+							& '{ "@type": "VideoObject", "thumbnailUrl": "https://example.test/t.jpg",'
+							& ' "contentUrl": "https://example.test/d.mp4", "duration": "#raw#" }'
+							& '</script>'
+							& '</head><body></body></html>',
+							"http://example.test/"
+						);
+						var videos = variables.parser.getVideos( page );
+						expect( videos[ 1 ].duration ).toBe( durations[ raw ], "duration #raw#" );
+					}
+				} );
+
+				it( "leaves duration at 0 when it cannot be read or is out of range", function(){
+					// "P1M" is one month (no fixed length), "PT0S" is below
+					// Google's minimum of 1, and "PT9H" is above its maximum of
+					// 28800 seconds.
+					for ( var raw in [ "banana", "P1M", "PT0S", "PT9H", "" ] ) {
+						var page = parseWithBase(
+							'<html><head><title>T</title>'
+							& '<meta name="description" content="D">'
+							& '<script type="application/ld+json">'
+							& '{ "@type": "VideoObject", "thumbnailUrl": "https://example.test/t.jpg",'
+							& ' "contentUrl": "https://example.test/d.mp4", "duration": "#raw#" }'
+							& '</script>'
+							& '</head><body></body></html>',
+							"http://example.test/"
+						);
+						var videos = variables.parser.getVideos( page );
+						expect( videos[ 1 ].duration ).toBe( 0, "duration #raw#" );
+					}
+				} );
+
+				it( "keeps the JSON-LD entry when og:video names the same URL", function(){
+					// JSON-LD is collected first, so its own name and
+					// description win over the page-level fallbacks the OG
+					// entry would have used.
+					var page = parseWithBase(
+						'<html><head><title>Page Title</title>'
+						& '<meta name="description" content="Page description.">'
+						& '<meta property="og:video" content="https://player.other/embed/7">'
+						& '<meta property="og:image" content="https://example.test/og-thumb.jpg">'
+						& '<script type="application/ld+json">'
+						& '{ "@type": "VideoObject", "name": "JSON-LD Clip",'
+						& ' "description": "Described in JSON-LD.",'
+						& ' "thumbnailUrl": "https://example.test/jsonld-thumb.jpg",'
+						& ' "embedUrl": "https://player.other/embed/7" }'
+						& '</script>'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].title ).toBe( "JSON-LD Clip" );
+					expect( videos[ 1 ].thumbnailLoc ).toBe( "https://example.test/jsonld-thumb.jpg" );
+				} );
+
+				it( "dedupes an og:video against a JSON-LD embedUrl even when the content URLs differ", function(){
+					// The JSON-LD entry holds a media file and a player page.
+					// Deduping on both of its URLs is what stops the OG tag,
+					// which names only the player page, emitting a second time.
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<meta name="description" content="D">'
+						& '<meta property="og:video" content="https://player.other/embed/7">'
+						& '<meta property="og:image" content="https://example.test/og-thumb.jpg">'
+						& '<script type="application/ld+json">'
+						& '{ "@type": "VideoObject", "name": "Both URLs", "description": "Media plus player.",'
+						& ' "thumbnailUrl": "https://example.test/thumb.jpg",'
+						& ' "contentUrl": "https://example.test/clip.mp4",'
+						& ' "embedUrl": "https://player.other/embed/7" }'
+						& '</script>'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					var videos = variables.parser.getVideos( page );
+					expect( videos.len() ).toBe( 1 );
+					expect( videos[ 1 ].contentLoc ).toBe( "https://example.test/clip.mp4" );
+					expect( videos[ 1 ].playerLoc ).toBe( "https://player.other/embed/7" );
+				} );
+
+				it( "drops a JSON-LD VideoObject with no content or embed URL", function(){
+					var page = parseWithBase(
+						'<html><head><title>T</title>'
+						& '<meta name="description" content="D">'
+						& '<script type="application/ld+json">'
+						& '{ "@type": "VideoObject", "name": "No URL", "description": "Nothing to point at.",'
+						& ' "thumbnailUrl": "https://example.test/thumb.jpg" }'
+						& '</script>'
+						& '</head><body></body></html>',
+						"http://example.test/"
+					);
+					expect( variables.parser.getVideos( page ).len() ).toBe( 0 );
+				} );
+
 			} );
 
 			describe( "getMetaRefreshUrl()", function(){
