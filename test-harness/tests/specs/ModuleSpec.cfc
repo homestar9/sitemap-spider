@@ -335,29 +335,31 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				// index.cfm carries an <img src="./assets/img/sample.jpg">. With
 				// includeImages on, that image is collected on the page struct and
 				// the sitemap XML emits an <image:image> entry with the image
-				// namespace. The setting is the shared module-settings struct, so it
-				// is restored in the finally to avoid leaking into other specs.
-				var settings = getInstance( "coldbox:moduleSettings:sitemap-spider" );
-				var original = settings.includeImages;
-				try {
-					settings.includeImages = true;
+				// namespace. The flag is passed to this one crawl (task 26), so the
+				// module setting stays off and nothing leaks into other specs.
+				var result = getInstance( "sitemapService@sitemap-spider" )
+					.create( url = variables.appRoot, includeImages = true );
 
-					var result = getInstance( "sitemapService@sitemap-spider" )
-						.create( variables.appRoot );
+				// The index page carries the sample image on its page struct.
+				var indexImages = pageFor( result.pages, variables.appRoot ).images;
+				expect( indexImages ).toBeArray();
+				expect( indexImages ).toInclude( variables.appRoot & "assets/img/sample.jpg" );
 
-					// The index page carries the sample image on its page struct.
-					var indexImages = pageFor( result.pages, variables.appRoot ).images;
-					expect( indexImages ).toBeArray();
-					expect( indexImages ).toInclude( variables.appRoot & "assets/img/sample.jpg" );
+				// The sitemap XML declares the image namespace and the entry.
+				expect( result.sitemap ).toInclude( "xmlns:image=" );
+				expect( result.sitemap ).toInclude(
+					"<image:loc>" & variables.appRoot & "assets/img/sample.jpg</image:loc>"
+				);
+			} );
 
-					// The sitemap XML declares the image namespace and the entry.
-					expect( result.sitemap ).toInclude( "xmlns:image=" );
-					expect( result.sitemap ).toInclude(
-						"<image:loc>" & variables.appRoot & "assets/img/sample.jpg</image:loc>"
-					);
-				} finally {
-					settings.includeImages = original;
-				}
+			it( "leaves images out when the crawl passes includeImages false", function(){
+				// The module setting is off by default, so this also proves the
+				// default: no argument, no images.
+				var result = getInstance( "sitemapService@sitemap-spider" )
+					.create( url = variables.appRoot, includeImages = false );
+
+				expect( pageFor( result.pages, variables.appRoot ).images.len() ).toBe( 0 );
+				expect( result.sitemap ).notToInclude( "xmlns:image=" );
 			} );
 
 		} );
@@ -367,64 +369,76 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			it( "records alternates and emits <xhtml:link> when includeHreflang is on", function(){
 				// index.cfm declares an "es" alternate on another host and an
 				// "x-default" pointing at itself. Both land on the page struct and
-				// in the XML, emitted exactly as declared. The setting is the
-				// shared module-settings struct, so it is restored in the finally.
-				var settings = getInstance( "coldbox:moduleSettings:sitemap-spider" );
-				var original = settings.includeHreflang;
-				try {
-					settings.includeHreflang = true;
+				// in the XML, emitted exactly as declared.
+				var result = getInstance( "sitemapService@sitemap-spider" )
+					.create( url = variables.appRoot, includeHreflang = true );
 
-					var result = getInstance( "sitemapService@sitemap-spider" )
-						.create( variables.appRoot );
+				var alternates = pageFor( result.pages, variables.appRoot ).alternates;
+				expect( alternates ).toBeArray();
+				expect( alternates.len() ).toBe( 2 );
+				expect( alternates[ 1 ].hreflang ).toBe( "es" );
+				expect( alternates[ 1 ].href ).toBe( "https://es.example.test/" );
+				expect( alternates[ 2 ].hreflang ).toBe( "x-default" );
 
-					var alternates = pageFor( result.pages, variables.appRoot ).alternates;
-					expect( alternates ).toBeArray();
-					expect( alternates.len() ).toBe( 2 );
-					expect( alternates[ 1 ].hreflang ).toBe( "es" );
-					expect( alternates[ 1 ].href ).toBe( "https://es.example.test/" );
-					expect( alternates[ 2 ].hreflang ).toBe( "x-default" );
-
-					expect( result.sitemap ).toInclude( 'xmlns:xhtml="http://www.w3.org/1999/xhtml"' );
-					expect( result.sitemap ).toInclude(
-						'<xhtml:link rel="alternate" hreflang="es" href="https://es.example.test/"/>'
-					);
-				} finally {
-					settings.includeHreflang = original;
-				}
+				expect( result.sitemap ).toInclude( 'xmlns:xhtml="http://www.w3.org/1999/xhtml"' );
+				expect( result.sitemap ).toInclude(
+					'<xhtml:link rel="alternate" hreflang="es" href="https://es.example.test/"/>'
+				);
 			} );
 
 			it( "records videos and emits <video:video> when includeVideos is on", function(){
 				// index.cfm carries a <video src="./assets/video/sample.mp4"
 				// poster="./assets/img/sample.jpg">. The title comes from the page
 				// <title> and the description from the meta description tag.
-				var settings = getInstance( "coldbox:moduleSettings:sitemap-spider" );
-				var original = settings.includeVideos;
-				try {
-					settings.includeVideos = true;
+				var result = getInstance( "sitemapService@sitemap-spider" )
+					.create( url = variables.appRoot, includeVideos = true );
 
-					var result = getInstance( "sitemapService@sitemap-spider" )
-						.create( variables.appRoot );
+				var videos = pageFor( result.pages, variables.appRoot ).videos;
+				expect( videos ).toBeArray();
+				expect( videos.len() ).toBe( 1 );
+				expect( videos[ 1 ].contentLoc ).toBe( variables.appRoot & "assets/video/sample.mp4" );
+				expect( videos[ 1 ].thumbnailLoc ).toBe( variables.appRoot & "assets/img/sample.jpg" );
+				expect( videos[ 1 ].title ).toBe( "Home" );
+				expect( videos[ 1 ].description ).toBe( "Sample home page with a video." );
 
-					var videos = pageFor( result.pages, variables.appRoot ).videos;
-					expect( videos ).toBeArray();
-					expect( videos.len() ).toBe( 1 );
-					expect( videos[ 1 ].contentLoc ).toBe( variables.appRoot & "assets/video/sample.mp4" );
-					expect( videos[ 1 ].thumbnailLoc ).toBe( variables.appRoot & "assets/img/sample.jpg" );
-					expect( videos[ 1 ].title ).toBe( "Home" );
-					expect( videos[ 1 ].description ).toBe( "Sample home page with a video." );
+				expect( result.sitemap ).toInclude( 'xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"' );
+				expect( result.sitemap ).toInclude(
+					"<video:video>"
+					& "<video:thumbnail_loc>" & variables.appRoot & "assets/img/sample.jpg</video:thumbnail_loc>"
+					& "<video:title>Home</video:title>"
+					& "<video:description>Sample home page with a video.</video:description>"
+					& "<video:content_loc>" & variables.appRoot & "assets/video/sample.mp4</video:content_loc>"
+					& "</video:video>"
+				);
+			} );
 
-					expect( result.sitemap ).toInclude( 'xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"' );
-					expect( result.sitemap ).toInclude(
-						"<video:video>"
-						& "<video:thumbnail_loc>" & variables.appRoot & "assets/img/sample.jpg</video:thumbnail_loc>"
-						& "<video:title>Home</video:title>"
-						& "<video:description>Sample home page with a video.</video:description>"
-						& "<video:content_loc>" & variables.appRoot & "assets/video/sample.mp4</video:content_loc>"
-						& "</video:video>"
-					);
-				} finally {
-					settings.includeVideos = original;
-				}
+			it( "reads a video from a JSON-LD block, duration included", function(){
+				// video-jsonld.cfm describes its video only in a JSON-LD
+				// VideoObject inside a @graph array, with no Open Graph tags and
+				// no <video> element. Nothing links to that page, so it is
+				// reached through seedUrls. Its own name and description win
+				// over the page <title>, and PT1M33S becomes 93 seconds.
+				var pageUrl = variables.appRoot & "video-jsonld.cfm";
+				var result  = getInstance( "sitemapService@sitemap-spider" ).create(
+					url           = variables.appRoot,
+					seedUrls      = [ pageUrl ],
+					includeVideos = true
+				);
+
+				var videos = pageFor( result.pages, pageUrl ).videos;
+				expect( videos.len() ).toBe( 1 );
+				expect( videos[ 1 ].title ).toBe( "Structured Data Clip" );
+				expect( videos[ 1 ].description ).toBe( "A video described only in JSON-LD." );
+				expect( videos[ 1 ].thumbnailLoc ).toBe( variables.appRoot & "assets/img/sample.jpg" );
+				expect( videos[ 1 ].contentLoc ).toBe( variables.appRoot & "assets/video/jsonld.mp4" );
+				expect( videos[ 1 ].playerLoc ).toBe( "https://player.example.test/embed/42" );
+				expect( videos[ 1 ].duration ).toBe( 93 );
+
+				expect( result.sitemap ).toInclude(
+					"<video:content_loc>" & variables.appRoot & "assets/video/jsonld.mp4</video:content_loc>"
+					& "<video:player_loc>https://player.example.test/embed/42</video:player_loc>"
+					& "<video:duration>93</video:duration>"
+				);
 			} );
 
 		} );
