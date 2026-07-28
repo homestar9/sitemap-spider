@@ -101,6 +101,19 @@ Each entry in `pages` looks like:
 }
 ```
 
+Each entry in `videos` looks like:
+
+```cfml
+{
+    title        : "Product tour",
+    description  : "A two minute tour.",
+    thumbnailLoc : "https://example.com/thumb.jpg",
+    contentLoc   : "https://example.com/tour.mp4",   // the media file, or empty
+    playerLoc    : "https://player.example.com/42",  // the player page, or empty
+    duration     : 93                                // whole seconds, 0 when unknown
+}
+```
+
 ## Settings
 
 Override any of these in your app's `config/ColdBox.cfc` under
@@ -122,9 +135,9 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `maxSitemapBytes` | `52428800` | sitemaps.org per-file byte limit (50 MiB, uncompressed). Above this the output splits. |
 | `gzipOutput` | `false` | When true and a `filePath` is given, the sitemap files are written gzip-compressed with a `.gz` suffix (e.g. `sitemap.xml.gz`). Child files and the `<sitemapindex>` `<loc>` entries carry `.gz` too. See the note below on serving `.gz`. |
 | `lastModFormat` | `"date"` | Format of `<lastmod>`: `"date"` writes the date-only form (`YYYY-MM-DD`); `"datetime"` writes the full W3C timestamp (`YYYY-MM-DDThh:mm:ss+HH:MM`) in the server's local timezone. |
-| `includeImages` | `false` | When true, each page's `<img src>` images are emitted as `<image:image>` entries and the `<urlset>` gains the image namespace. Images are not host-filtered (CDN images are kept), capped at 1000 per page. |
-| `includeHreflang` | `false` | When true, each page's `<link rel="alternate" hreflang="...">` tags are emitted as `<xhtml:link>` entries and the `<urlset>` gains the xhtml namespace. Alternates are emitted exactly as declared — off-host targets are kept (hreflang usually points at other domains) and `x-default` is allowed. Capped at 1000 per page. |
-| `includeVideos` | `false` | When true, each page's videos are emitted as `<video:video>` blocks and the `<urlset>` gains the video namespace. Videos are read from Open Graph tags (`og:video` becomes `<video:player_loc>`) and `<video>` elements (`src` or a `<source src>` child becomes `<video:content_loc>`, `poster` the thumbnail). The title and description fall back to `og:title`/`<title>` and `og:description`/meta description; the thumbnail falls back to `og:image`. A video still missing a required field (thumbnail, title, description, or a URL) is dropped. Capped at 100 per page. |
+| `includeImages` | `false` | When true, each page's `<img src>` images are emitted as `<image:image>` entries and the `<urlset>` gains the image namespace. Images are not host-filtered (CDN images are kept), capped at 1000 per page. The `create()` `includeImages` argument overrides this setting for a single crawl. |
+| `includeHreflang` | `false` | When true, each page's `<link rel="alternate" hreflang="...">` tags are emitted as `<xhtml:link>` entries and the `<urlset>` gains the xhtml namespace. Alternates are emitted exactly as declared — off-host targets are kept (hreflang usually points at other domains) and `x-default` is allowed. Capped at 1000 per page. The `create()` `includeHreflang` argument overrides this setting for a single crawl. |
+| `includeVideos` | `false` | When true, each page's videos are emitted as `<video:video>` blocks and the `<urlset>` gains the video namespace. Videos are read from three sources: JSON-LD `VideoObject` blocks, Open Graph tags (`og:video` becomes `<video:player_loc>`) and `<video>` elements (`src` or a `<source src>` child becomes `<video:content_loc>`, `poster` the thumbnail). The title and description fall back to `og:title`/`<title>` and `og:description`/meta description; the thumbnail falls back to `og:image`. A video still missing a required field (thumbnail, title, description, or a URL) is dropped. Capped at 100 per page. The `create()` `includeVideos` argument overrides this setting for a single crawl. |
 | `lastModFallback` | `"omit"` | What `<lastmod>` does when a page has no parseable Last-Modified: `"omit"` leaves it out; `"crawlTime"` records the crawl timestamp. |
 | `requestTimeout` | `10000` | Per-request timeout in milliseconds. |
 | `maxBodySize` | `5242880` | Cap (bytes) on the response body a fetch downloads (5 MB). |
@@ -135,6 +148,19 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `libPath` | `<modulePath>/lib` | Directory cbjavaloader loads the jsoup jar from. |
 | `htmlContentTypePattern` | `^(text/html\|application/xhtml\+xml)(;.*)?$` | Only responses whose content type matches are parsed for links and canonical URLs. |
 
+These apply only to background jobs (see [Background jobs](#background-jobs)):
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `maxConcurrentJobs` | `3` | How many queued crawls run at once. The rest wait as `queued` and start as slots free up. Each job crawls single-threaded, so this is roughly the live thread count — and, when jobs use the Playwright backend, the number of browser processes. |
+| `maxRetainedJobs` | `100` | How many finished job records to keep. The oldest are dropped past this. `0` or less keeps everything. |
+| `jobStoreDsl` | `"InMemoryJobStore@sitemap-spider"` | Where job records are kept. The default keeps them in memory, so they are lost on a restart. Point it at your own `IJobStore` to keep them. |
+| `jobNodeId` | `""` (empty) | Names this app server in job records. Empty uses the machine's host name. Only matters when several servers share one job store. |
+| `jobHeartbeatSeconds` | `15` | How often a running job writes its counters and a "still alive" timestamp to the store. |
+| `jobStaleSeconds` | `90` | How long a job can go without reporting progress before it is treated as dead and marked `interrupted`. Keep it several times `jobHeartbeatSeconds` so a slow garbage-collection pause never kills a healthy job. |
+| `jobReaperEnabled` | `true` | Whether the background task that marks dead jobs `interrupted` runs. |
+| `jobReaperIntervalSeconds` | `60` | How often that task runs. |
+
 ## Browser backends
 
 The `browserDsl` setting selects how each URL is fetched. Both backends share
@@ -144,6 +170,12 @@ the `IBrowser` interface in `models/browsers/`.
 | --- | --- | --- |
 | jsoup (default) | `Jsoup@sitemap-spider` | Static HTML. Fast, no extra dependency. Links and content already present in the server-rendered HTML. |
 | Playwright | `Playwright@sitemap-spider` | Pages whose links or content are added by JavaScript in the browser. Requires the optional `cbPlaywright` module. |
+
+`browserDsl` is a global setting, but the `create()` and
+`SitemapJobRegistry.queue()` `browserDsl` argument overrides it for a single
+crawl. Use that when you crawl several sites and only some of them need
+JavaScript rendering — each Playwright crawl runs its own browser process, so it
+is worth pointing only the sites that need it at that backend.
 
 ## cbPlaywright setup (optional)
 
@@ -201,7 +233,14 @@ sees links and content that JavaScript adds after load. It needs some setup:
 > instance. Also stop the server cleanly (`box server stop`, or let a crawl
 > finish normally) — the backend closes the browser and its driver when a crawl
 > ends, but a hard kill of the JVM can leave orphaned Chromium `headless_shell`
-> processes behind.
+> processes behind. Running in a container is the reliable fix for that, since
+> the browser processes go away with it. A ColdBox reinit is safe: the crawl
+> closes its own browser as it stops.
+>
+> Each crawl using this backend runs its own browser, so several at once is
+> expensive. When queueing background jobs, keep `maxConcurrentJobs` low or point
+> only the sites that need JavaScript at this backend with the per-crawl
+> `browserDsl` argument.
 
 ## Output and splitting
 
@@ -236,9 +275,159 @@ sees links and content that JavaScript adds after load. It needs some setup:
   `<url>`, plus the `xmlns:xhtml="http://www.w3.org/1999/xhtml"` namespace on
   the `<urlset>`.
 - **Video sitemaps** (`includeVideos = true`) add `<video:video>` blocks per
-  page (thumbnail, title, description, then a content and/or player URL), plus
-  the `xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"` namespace
-  on the `<urlset>`.
+  page (thumbnail, title, description, then a content and/or player URL, then
+  duration in seconds when known), plus the
+  `xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"` namespace on
+  the `<urlset>`. Videos come from three sources, read in this order:
+
+  | Source | Media URL | Player URL | Title and description |
+  | --- | --- | --- | --- |
+  | JSON-LD `VideoObject` | `contentUrl` | `embedUrl` | its own `name` and `description` |
+  | Open Graph | — | `og:video` | the page's |
+  | `<video>` element | `src` or `<source src>` | — | the page's |
+
+  JSON-LD is read first on purpose. A `VideoObject` describes one specific
+  video, so its own title, description and `thumbnailUrl` beat the page-level
+  text the other two sources fall back to, and it is the only source that can
+  give both a media URL and a player URL. When two sources name the same URL,
+  the earlier one wins and the later one is dropped. `VideoObject` entries are
+  found wherever they sit in the block: at the top level, in an array, under
+  `@graph`, or nested inside another type. A block that is not valid JSON is
+  skipped and the crawl carries on.
+
+  `<video:duration>` comes from the JSON-LD `duration` field, converted from
+  ISO 8601 (`PT1M33S`) to the whole seconds the sitemap protocol wants. A value
+  that cannot be read, or that falls outside Google's 1–28800 second range, is
+  left out. The other two sources carry no duration.
+
+- **Per-crawl extension flags.** All three settings above are global, but
+  `create()` and `SitemapJobRegistry.queue()` take `includeImages`,
+  `includeHreflang` and `includeVideos` as arguments that override the setting
+  for one crawl, in either direction. Omit the argument to use the setting.
+  A host generating sitemaps for many sites needs this, because the right
+  extensions differ per site:
+
+  ```cfml
+  sitemapService.create( url = "https://example.com/", includeVideos = true );
+  ```
+
+## Background jobs
+
+`SitemapService.create()` blocks until the crawl finishes, which is fine for one
+site. To crawl several sites at once, watch their progress, and let a user cancel
+one, use `SitemapJobRegistry` instead. It hands the crawl to a background thread
+pool and gives you back a job id right away.
+
+```cfml
+property name="jobs" inject="SitemapJobRegistry@sitemap-spider";
+
+// Returns immediately. filePath is required: a background job has no response to
+// write to, so it saves the file for you to serve or upload later.
+var jobId = jobs.queue(
+    url      = "https://example.com/",
+    filePath = expandPath( "/sitemaps/example.xml" )
+);
+
+var job = jobs.getJob( jobId );
+// job.status   -> queued | running | completed | failed | canceled | interrupted
+// job.progress -> { pagesFound, urlsProcessed, badUrls, remaining, elapsedMs, ... }
+// job.result   -> { saved, filePath, type, sitemapCount } once it completes
+
+jobs.listJobs();            // every job, newest first
+jobs.cancel( jobId );       // stops after the page it is on
+jobs.remove( jobId );       // drops the record
+```
+
+`maxConcurrentJobs` (default 3) sets how many run at once; the rest wait as
+`queued` and start as slots free up. Each job crawls single-threaded, so the live
+thread count stays near that number. Passing `runAsync = true` to a job makes that
+one crawl use several threads too, which multiplies threads
+(`maxConcurrentJobs` × `asyncMaxThreads` at worst) — keep that within your
+engine's thread pool.
+
+### Per-site options
+
+`queue()` takes the same crawl arguments as `create()`, plus:
+
+- **`browserDsl`** picks the backend for that job, e.g.
+  `"Playwright@sitemap-spider"` for a site whose links need JavaScript. Empty uses
+  the `browserDsl` setting. Each Playwright job runs its own browser process, so
+  keep `maxConcurrentJobs` low if several sites use it. `create()` accepts this
+  argument too.
+- **`includeImages`, `includeHreflang`, `includeVideos`** turn each sitemap
+  extension on or off for that job, overriding the module setting. Omit one to
+  use the setting. The values are resolved when the job is queued and stored on
+  its record, so a job runs with the settings it was queued under even if a
+  setting changes before its turn comes up.
+- **`meta`** is a struct of your own values (site id, customer id, anything). It
+  is stored as-is, returned with every read, and can be filtered on:
+  `jobs.listJobs( { customerId : "acme" } )`. This module never looks inside it.
+  You can also filter by status: `jobs.listJobs( { status : "running" } )`.
+
+### Reacting to jobs
+
+The module announces these ColdBox interception points, each with
+`{ jobId, record }`. Listen to them to upload the finished file, email someone, or
+decide whether to retry — no need for this module to know about any of that.
+Announcing an event nobody listens for does nothing.
+
+| Point | When |
+| --- | --- |
+| `onSitemapJobQueued` | A job was accepted |
+| `onSitemapJobStarted` | A worker picked it up |
+| `onSitemapJobCompleted` | The crawl finished and the file was written |
+| `onSitemapJobFailed` | The crawl threw |
+| `onSitemapJobInterrupted` | It was canceled, or its process died |
+
+### What happens when the app restarts or crashes
+
+A crawl runs in memory, so it cannot survive the JVM going away, and a
+breadth-first crawl cannot cheaply resume part way through. Instead, jobs that
+stop unexpectedly are marked `interrupted` so nothing is left looking active and
+you can decide whether to run it again.
+
+| What happened | How it is handled |
+| --- | --- |
+| ColdBox reinit (`?fwreinit=1`) | The module cancels its running crawls and records them as `interrupted` before the framework rebuilds |
+| Server stopped or killed, out of memory | No code runs, so nothing is recorded at the time. A background task notices the job stopped reporting progress (`jobStaleSeconds`) and marks it `interrupted` |
+| App restarted, durable store in use | At startup, jobs left `running` by the previous start are recognised by their boot id and marked `interrupted` immediately |
+
+That upkeep runs automatically — `config/Scheduler.cfc` ships with the module and
+needs no wiring. It writes each running job's counters to the store every
+`jobHeartbeatSeconds`, which is also what makes progress visible for a job running
+on another server. Set `jobReaperEnabled = false` to turn the cleanup off.
+
+### Keeping job records
+
+By default records live in memory (`InMemoryJobStore`) and are lost on a restart.
+The saved sitemap files are not affected. To keep records, write a component
+implementing `IJobStore` (see
+[models/jobs/IJobStore.cfc](models/jobs/IJobStore.cfc)) and point the module at
+it:
+
+```cfml
+moduleSettings = {
+    "sitemap-spider" : { jobStoreDsl : "MyDbJobStore@myapp" }
+};
+```
+
+The interface is small, and the counters that change constantly during a crawl
+never reach it — a store only sees status changes and a heartbeat, so a few writes
+per job. Two methods carry the important rules:
+
+- **`claim()`** must move a job from `queued` to `running` for exactly one caller.
+  With a database that is a conditional update
+  (`... set status = 'running' where id = ? and status = 'queued'`) checking that
+  one row changed. This is what lets more than one app server share a job store
+  without running the same job twice.
+- **`save()`** with an `expectedOwnerId` must only write if the job still belongs
+  to that owner. This drops a late write from a crawl thread that outlived a
+  reinit, after its job was already marked interrupted and re-claimed.
+
+Two things stay your responsibility with a durable store: jobs still sitting in
+`queued` when the app stops are not picked back up automatically (the in-process
+pool queue went away with it, so re-queue them at startup), and deciding whether
+to retry an `interrupted` job — the record's `attempts` count is there to cap it.
 
 ## Releasing (maintainers)
 

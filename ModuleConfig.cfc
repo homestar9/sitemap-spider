@@ -22,6 +22,20 @@ component {
 	this.dependencies 		= [ "cbjavaloader" ];
 
 	/**
+	 * Events SitemapJobRegistry fires as a background job moves through its life.
+	 * A host app listens to these to do its own work without this module having to
+	 * know about it — uploading the finished file over FTP or SSH, emailing a
+	 * customer, recording usage, or deciding whether to re-queue an interrupted
+	 * job. Every listener receives { jobId, record }.
+	 *
+	 * Announcing an event nobody listens for does nothing, so apps that only call
+	 * SitemapService directly are unaffected.
+	 */
+	variables.interceptorSettings = {
+		customInterceptionPoints : "onSitemapJobQueued,onSitemapJobStarted,onSitemapJobCompleted,onSitemapJobFailed,onSitemapJobInterrupted"
+	};
+
+	/**
 	 * Configure Module
 	 */
 	function configure(){
@@ -37,6 +51,45 @@ component {
             // can override this per crawl via SitemapService.create( runAsync = ).
             runAsync : false,
             asyncMaxThreads : 10, // worker count for a parallel crawl
+            // Background-job settings (SitemapJobRegistry). A host queues crawls
+            // with registry.queue(), then polls getJob()/listJobs() for progress.
+            //
+            // jobStoreDsl: WireBox DSL of the IJobStore that holds job records. The
+            //   default keeps them in memory (lost on a server restart or reinit).
+            //   Point this at a durable IJobStore to keep records across restarts.
+            jobStoreDsl : "InMemoryJobStore@sitemap-spider",
+            // maxConcurrentJobs: how many queued crawls run at once. It is the size
+            //   of the registry's fixed thread pool; extra jobs wait as "queued"
+            //   and auto-start as slots free. Each running job crawls
+            //   single-threaded by default, so the live thread count stays near
+            //   this number. Raising it, or opting jobs into runAsync, multiplies
+            //   threads (maxConcurrentJobs * asyncMaxThreads worst case) — keep
+            //   that within the engine's thread pool.
+            maxConcurrentJobs : 3,
+            // maxRetainedJobs: cap on finished records kept in the store. The
+            //   oldest are evicted past this, so a long-running host does not
+            //   accumulate job records forever.
+            maxRetainedJobs : 100,
+            // jobNodeId: names this app server in job records. Leave empty to use
+            //   the machine's host name. Only matters when more than one server
+            //   shares one job store: the boot sweep uses it to tell its own
+            //   leftover jobs from another server's live ones.
+            jobNodeId : "",
+            // jobHeartbeatSeconds: how often a running job writes its counters and
+            //   a "still alive" timestamp to the store. This is what lets a
+            //   dashboard show progress for a job running elsewhere, and what the
+            //   stale check reads to notice a job whose process died.
+            jobHeartbeatSeconds : 15,
+            // jobStaleSeconds: how old a job's last heartbeat must be before it is
+            //   treated as dead and marked interrupted. Keep it several times
+            //   jobHeartbeatSeconds so a slow garbage collection pause never kills
+            //   a healthy job.
+            jobStaleSeconds : 90,
+            // jobReaperEnabled: turns off the background task that marks dead jobs
+            //   interrupted. Leave it on unless another process handles cleanup.
+            jobReaperEnabled : true,
+            // jobReaperIntervalSeconds: how often that cleanup task runs.
+            jobReaperIntervalSeconds : 60,
             respectRobotsTxt : true, // fetch and honor robots.txt Disallow/Allow rules
             userAgent : "sitemap-spider", // matched against robots User-agent groups and sent on fetches
             maxCrawlDelay : 10, // cap (seconds) on the robots Crawl-delay actually applied between fetches
@@ -74,19 +127,24 @@ component {
             // When true, each crawled page's <img src> images are collected and
             // emitted as <image:image> entries, and the <urlset> gains the image
             // namespace. false leaves images out and keeps the output unchanged.
+            // The SitemapService.create( includeImages = ) argument overrides
+            // this for a single crawl, in either direction.
             includeImages : false,
             // When true, each page's <link rel="alternate" hreflang="..."> tags
             // are collected and emitted as <xhtml:link> entries, and the
             // <urlset> gains the xhtml namespace. Alternates are emitted exactly
             // as declared, including ones on other hosts. false keeps the
-            // output unchanged.
+            // output unchanged. The SitemapService.create( includeHreflang = )
+            // argument overrides this for a single crawl.
             includeHreflang : false,
-            // When true, each page's videos (Open Graph og:video tags and
-            // <video> elements) are collected and emitted as <video:video>
-            // blocks, and the <urlset> gains the video namespace. A video is
-            // only emitted when it has the fields Google requires: a thumbnail,
+            // When true, each page's videos are collected and emitted as
+            // <video:video> blocks, and the <urlset> gains the video namespace.
+            // Three sources are read: JSON-LD VideoObject blocks first, then
+            // Open Graph og:video tags, then <video> elements. A video is only
+            // emitted when it has the fields Google requires: a thumbnail,
             // title, description, and a content or player URL. false keeps the
-            // output unchanged.
+            // output unchanged. The SitemapService.create( includeVideos = )
+            // argument overrides this for a single crawl.
             includeVideos : false,
             // What <lastmod> does when a page has no parseable Last-Modified
             // (no HTTP header, no meta tag): "omit" leaves <lastmod> out for that
@@ -128,10 +186,30 @@ component {
 	}
 
 	/**
-	 * Fired when the module is unregistered and unloaded
+	 * Stops background sitemap jobs before the module goes away.
+	 *
+	 * ColdBox calls this on a framework reinit. Rebuilding the framework replaces
+	 * every singleton, so the new SitemapJobRegistry would have no idea the old
+	 * one's crawls exist. This asks the registry to stop them and write them down
+	 * as interrupted, so a host sees "interrupted" (and can retry) instead of jobs
+	 * stuck on "running" forever.
+	 *
+	 * Everything is wrapped in a try/catch on purpose. An error thrown out of
+	 * onUnload() travels up and makes ColdBox delete the whole application, so a
+	 * hiccup shutting jobs down must never be allowed to escape.
+	 *
+	 * This does not cover a server stop or a crash — no code runs then. The
+	 * registry's stale-job check handles those the next time the app starts.
 	 */
 	function onUnload(){
-
+		try {
+			wireBox.getInstance( "SitemapJobRegistry@sitemap-spider" ).shutdown();
+		} catch ( any e ) {
+			// Nowhere to report this but the log; see above for why it cannot rethrow.
+			if ( structKeyExists( variables, "log" ) ) {
+				log.error( "sitemap-spider: error shutting down sitemap jobs: #e.message#", e );
+			}
+		}
 	}
 
 }

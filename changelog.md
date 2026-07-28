@@ -11,6 +11,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- JSON-LD videos. `includeVideos` now reads schema.org `VideoObject` entries out
+  of `<script type="application/ld+json">` blocks, on top of the Open Graph tags
+  and `<video>` elements it already read. Entries are found wherever they sit in
+  the block: at the top level, in an array, under `@graph`, or nested inside
+  another type. `contentUrl` becomes `<video:content_loc>`, `embedUrl` becomes
+  `<video:player_loc>`, and the block's own `name`, `description` and
+  `thumbnailUrl` are used instead of the page-level fallbacks. A block that is
+  not valid JSON is skipped and the crawl carries on. JSON-LD is read before the
+  other two sources, so when two of them name the same URL the JSON-LD entry is
+  the one that survives.
+- `<video:duration>`, converted from the JSON-LD `duration` field's ISO 8601
+  form (`PT1M33S`) to the whole seconds the sitemap protocol wants. Video structs
+  on the crawl result gained a matching `duration` key. A value that cannot be
+  read, or that falls outside Google's 1–28800 second range, is left out.
+- `includeImages`, `includeHreflang` and `includeVideos` arguments on
+  `SitemapService.create()`, `Crawler.crawl()` and `SitemapJobRegistry.queue()`.
+  Each overrides the module setting of the same name for one crawl, in either
+  direction; omitting the argument uses the setting. A host generating sitemaps
+  for many sites needs this, because the right extensions differ per site. Job
+  records gained `includeImages`, `includeHreflang` and `includeVideos` keys; a
+  record written before they existed still runs, falling back to the settings.
+- Background sitemap jobs, so a host app can crawl several sites at once, watch
+  each one's progress, and cancel one. `SitemapJobRegistry@sitemap-spider`
+  provides `queue()` (returns a job id right away), `getJob()`, `listJobs()`,
+  `cancel()`, and `remove()`. `maxConcurrentJobs` (default `3`) sets how many run
+  at once; the rest wait as `queued` and start as slots free up. A queued job
+  must be given a `filePath`, because a background job has no response to write
+  to. Calling `SitemapService.create()` directly is unchanged and still blocks.
+- Live crawl progress and cancellation. `SitemapService.create()` and
+  `Crawler.crawl()` take an optional `progress` argument (a `CrawlProgress`)
+  reporting pages found, URLs processed, bad URLs, how many are left, and elapsed
+  time. Cancelling it stops the crawl after the page it is on. Omitting the
+  argument leaves behavior exactly as before.
+- `browserDsl` argument on `SitemapService.create()`, `Crawler.crawl()`, and
+  `SitemapJobRegistry.queue()`, choosing the browser backend for one crawl. Empty
+  uses the `browserDsl` setting. This is for hosts crawling many sites where only
+  some need JavaScript rendering.
+- Pluggable job storage. `IJobStore` defines where job records live, and
+  `InMemoryJobStore` (the default) keeps them in memory. Point the new
+  `jobStoreDsl` setting at your own implementation to keep records across
+  restarts or to share them between app servers. The counters that change during
+  a crawl never reach the store — it only sees status changes and a periodic
+  heartbeat.
+- Recovery for jobs that stop unexpectedly, so none are left looking like they
+  are still running. A ColdBox reinit cancels running crawls and records them as
+  `interrupted`; a background task marks jobs that stop reporting progress
+  (`jobStaleSeconds`); and with a durable store, jobs left running by a previous
+  start of the app are marked at startup. The upkeep ships with the module in
+  `config/Scheduler.cfc` and needs no wiring. New settings: `jobNodeId`,
+  `jobHeartbeatSeconds`, `jobStaleSeconds`, `jobReaperEnabled`,
+  `jobReaperIntervalSeconds`, `maxRetainedJobs`.
+- Job events a host app can listen to: `onSitemapJobQueued`,
+  `onSitemapJobStarted`, `onSitemapJobCompleted`, `onSitemapJobFailed`, and
+  `onSitemapJobInterrupted`, each with `{ jobId, record }`. Use them to upload the
+  finished file, notify someone, or decide whether to retry. Announcing an event
+  nobody listens for does nothing.
+- `meta` argument on `SitemapJobRegistry.queue()`: a struct of the host's own
+  values (site id, customer id, and so on) stored with the job, returned on every
+  read, and usable as a filter in `listJobs()`. This module never reads it.
 - `gzipOutput` module setting: when `true` and a `filePath` is given, the sitemap
   files are written gzip-compressed with a `.gz` suffix (e.g. `sitemap.xml.gz`).
   For a split set the child filenames and the `<sitemapindex>` `<loc>` entries
@@ -71,6 +130,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   final URL, and `chain` lists each hop as `{ url, status }`.
 
 ### Changed
+
+- `SitemapService.create()` now builds a fresh `Crawler` for each call instead of
+  reusing one injected instance. A crawler keeps the whole crawl in its own
+  variables scope, so two crawls running at the same time used to overwrite each
+  other's state. Each crawl now gets its own crawler and its own browser. Single
+  crawls behave exactly as before.
+- A crawl now takes its own copy of the module settings when it starts. Settings
+  are one shared struct, so without this a second crawl running at the same time,
+  or a host changing a setting mid-crawl, could alter a crawl already underway.
+  Changing a setting now affects crawls that start afterwards.
 
 - `Parser.getLinks()` now returns a struct `{ links, ignored }` instead of a
   plain array of link strings. `links` is the same crawlable-URL array as before;
