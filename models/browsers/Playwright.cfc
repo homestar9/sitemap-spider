@@ -31,6 +31,24 @@
  * Playwright's own driver watches its stdin pipe and normally stops Chromium
  * when the JVM connection drops. An external process reaper is out of scope.
  * (Task 25 decision — see supportsParallel() for the parallel side.)
+ *
+ * A ColdBox reinit is a third case, and it is covered. The JVM keeps running, so
+ * the stdin-pipe safety net above never fires — but ColdBox only interrupts the
+ * crawl thread, and the crawl loops watch their CrawlProgress cancel flag rather
+ * than the interrupt, so the thread keeps going and reaches crawl()'s finally,
+ * which closes this browser normally. SitemapJobRegistry.shutdown() sets that
+ * cancel flag so it happens within a page instead of at the end of the crawl.
+ * Note what it deliberately does NOT do: close this browser itself. A Playwright
+ * instance can only be driven from the thread that created it (see
+ * supportsParallel()), so closing it from the thread handling the reinit could
+ * throw or hang. The owning thread does it.
+ *
+ * Cost per crawl: this backend holds a Playwright instance, a Node driver
+ * process, and a Chromium process, and it is resolved per Crawler. Since
+ * SitemapService builds a fresh Crawler per create(), every concurrent crawl
+ * using this backend runs its own full stack. A host running background jobs
+ * should keep maxConcurrentJobs low, or only point specific sites at this
+ * backend via the per-crawl browserDsl argument.
  */
 component
     extends="BaseBrowser"
