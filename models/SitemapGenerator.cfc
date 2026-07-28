@@ -238,7 +238,9 @@ component {
         }
         // Element order inside <video:video> follows Google's video-sitemap
         // schema: thumbnail_loc, title, description, then content_loc and/or
-        // player_loc. The Parser guarantees at least one of the two URLs is set.
+        // player_loc, then duration. The Parser guarantees at least one of the
+        // two URLs is set, and that duration is either 0 or a value in
+        // Google's allowed 1-28800 second range.
         if ( arguments.includeVideos && arguments.data.keyExists( "videos" ) ) {
             for ( var video in arguments.data.videos ) {
                 entry &= '<video:video>';
@@ -250,6 +252,12 @@ component {
                 }
                 if ( len( video.playerLoc ) ) {
                     entry &= '<video:player_loc>#xmlFormat( video.playerLoc )#</video:player_loc>';
+                }
+                // The key is checked rather than read straight, because a
+                // caller can hand in its own page structs and older ones have
+                // no duration.
+                if ( video.keyExists( "duration" ) && val( video.duration ) > 0 ) {
+                    entry &= '<video:duration>#int( val( video.duration ) )#</video:duration>';
                 }
                 entry &= '</video:video>';
             }

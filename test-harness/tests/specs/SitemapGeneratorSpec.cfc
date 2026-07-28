@@ -293,6 +293,61 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					expect( xml.reMatch( "<video:player_loc>" ).len() ).toBe( 1 );
 				} );
 
+				it( "emits <video:duration> after the URL elements when a video has one", function(){
+					var pages = [
+						page(
+							url      = "http://example.test/a.cfm",
+							priority = 0.5,
+							videos   = [ {
+								title        : "Clip Title",
+								description  : "Clip description.",
+								thumbnailLoc : "http://example.test/thumb.jpg",
+								contentLoc   : "http://example.test/clip.mp4",
+								playerLoc    : "https://player.other/embed/1",
+								duration     : 93
+							} ]
+						)
+					];
+					var xml = variables.generator.generate( pages = pages, includeVideos = true );
+
+					expect( xml ).toInclude(
+						"<video:content_loc>http://example.test/clip.mp4</video:content_loc>"
+						& "<video:player_loc>https://player.other/embed/1</video:player_loc>"
+						& "<video:duration>93</video:duration>"
+					);
+				} );
+
+				it( "leaves <video:duration> out when the duration is zero or the key is missing", function(){
+					var pages = [
+						page(
+							url      = "http://example.test/a.cfm",
+							priority = 0.5,
+							videos   = [
+								{
+									title        : "Zero",
+									description  : "Duration of zero.",
+									thumbnailLoc : "http://example.test/t1.jpg",
+									contentLoc   : "http://example.test/zero.mp4",
+									playerLoc    : "",
+									duration     : 0
+								},
+								{
+									// No duration key at all, the shape a caller
+									// building its own page structs may hand in.
+									title        : "Missing",
+									description  : "No duration key.",
+									thumbnailLoc : "http://example.test/t2.jpg",
+									contentLoc   : "http://example.test/missing.mp4",
+									playerLoc    : ""
+								}
+							]
+						)
+					];
+					var xml = variables.generator.generate( pages = pages, includeVideos = true );
+
+					expect( xml ).notToInclude( "<video:duration>" );
+				} );
+
 				it( "escapes XML special characters in video title and description", function(){
 					var pages = [
 						page(
