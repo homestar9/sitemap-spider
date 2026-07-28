@@ -2,10 +2,13 @@ component
     hint="I am the sitemap service"
 {
 
-    property name="crawler" inject="Crawler@sitemap-spider";
     property name="generator" inject="SitemapGenerator@sitemap-spider";
     property name="settings" inject="coldbox:moduleSettings:sitemap-spider";
     property name="logger" inject="logbox:logger:{this}";
+    // Used to resolve a fresh Crawler per create() call. The Crawler keeps its
+    // whole crawl in variables scope, so it must not be shared across concurrent
+    // crawls; see create().
+    property name="wirebox" inject="Wirebox";
 
 
     /**
@@ -44,6 +47,19 @@ component
      *   Crawl-delay no longer forces sync — the delay is applied as a shared
      *   per-fetch spacing across the workers. The returned struct's runAsync key
      *   reports whether the crawl actually ran in parallel.
+     * @progress Optional CrawlProgress the crawl updates as it runs, so a caller
+     *   (e.g. SitemapJobRegistry) can poll live counts and request cancellation.
+     *   When omitted, the crawl uses its own no-op progress and nothing changes.
+     * @browserDsl Optional browser backend for this crawl only, e.g.
+     *   "Playwright@sitemap-spider" for a site whose links need JavaScript.
+     *   Empty uses the browserDsl module setting.
+     * @includeImages Turn the image sitemap extension on or off for this crawl
+     *   only. Omit the argument to use the includeImages module setting. The
+     *   value reaches both the crawl (which collects the images) and the
+     *   generator (which prints them), because a page struct carrying images
+     *   the XML leaves out would be a waste, and the reverse cannot work.
+     * @includeHreflang Same, for the hreflang alternates extension.
+     * @includeVideos Same, for the video extension.
      * @return A struct containing the crawled pages, sitemap XML, and duration
      */
     struct function create(
@@ -53,10 +69,22 @@ component
         string excludePattern = "", // Per-crawl section-exclude regex; overrides the module setting when non-empty
         string filePath = "", // Optional file path to save the sitemap XML to
         string publicBaseUrl = "", // Absolute URL prefix for <sitemapindex> entries
-        boolean runAsync // Defaults to settings.runAsync below
+        boolean runAsync, // Defaults to settings.runAsync below
+        any progress, // Optional CrawlProgress for live tracking + cancellation
+        string browserDsl = "", // Per-crawl browser backend; empty uses the setting
+        boolean includeImages, // Defaults to settings.includeImages below
+        boolean includeHreflang, // Defaults to settings.includeHreflang below
+        boolean includeVideos // Defaults to settings.includeVideos below
     ) {
         // Default runAsync to the module setting when the caller did not pass it.
         param name="arguments.runAsync" default="#settings.runAsync#";
+
+        // Same for the three sitemap extension flags. Resolved once here and
+        // then handed to both the crawl and the generator below, so the two
+        // always agree on which extensions this run is producing.
+        param name="arguments.includeImages" default="#settings.includeImages#";
+        param name="arguments.includeHreflang" default="#settings.includeHreflang#";
+        param name="arguments.includeVideos" default="#settings.includeVideos#";
 
         var start = getTickCount();
 
@@ -71,13 +99,31 @@ component
         crawlSeeds.append( urlArray, true );
         crawlSeeds.append( arguments.seedUrls, true );
 
-        // Crawl the site and populate pages
-        var result = crawler.crawl(
+        // Resolve a fresh Crawler for this call. The Crawler holds its entire
+        // crawl in variables scope, so a shared instance would let two concurrent
+        // create() calls overwrite each other's state. A fresh transient one gives
+        // this crawl its own state and its own browser.
+        var crawler = wirebox.getInstance( "Crawler@sitemap-spider" );
+
+        // Pass progress only when the caller supplied it; otherwise the Crawler
+        // builds its own no-op progress. Built as a struct so the optional
+        // argument is never referenced when null.
+        var crawlArgs = {
             urls = crawlSeeds,
             excludeUrls = arguments.excludeUrls,
             excludePattern = arguments.excludePattern,
-            runAsync = arguments.runAsync
-        );
+            runAsync = arguments.runAsync,
+            browserDsl = arguments.browserDsl,
+            includeImages = arguments.includeImages,
+            includeHreflang = arguments.includeHreflang,
+            includeVideos = arguments.includeVideos
+        };
+        if ( !isNull( arguments.progress ) ) {
+            crawlArgs.progress = arguments.progress;
+        }
+
+        // Crawl the site and populate pages
+        var result = crawler.crawl( argumentCollection = crawlArgs );
 
         // The absolute URL prefix the child sitemaps are served from. Prefer the
         // caller's publicBaseUrl; otherwise use the first start URL's directory
@@ -107,9 +153,9 @@ component
             maxBytes       = settings.maxSitemapBytes,
             gzip           = gzip,
             lastModFormat  = settings.lastModFormat,
-            includeImages  = settings.includeImages,
-            includeHreflang = settings.includeHreflang,
-            includeVideos  = settings.includeVideos
+            includeImages  = arguments.includeImages,
+            includeHreflang = arguments.includeHreflang,
+            includeVideos  = arguments.includeVideos
         );
 
         // The path the primary file is actually written to. With gzip on, ".gz"

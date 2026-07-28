@@ -98,6 +98,20 @@ component accessors=true hint="Handles crawling of website URLs" {
      *           otherwise the crawl runs single-threaded (a downgrade is logged).
      *           A robots Crawl-delay no longer forces sync: the delay is applied
      *           as a shared per-fetch spacing across the workers (applyCrawlDelay).
+     * @progress Optional CrawlProgress the crawl updates as it runs (pages found,
+     *           URLs processed, bad URLs, remaining) and checks for cancellation
+     *           between items. When omitted, a fresh no-op one is used, so behavior
+     *           is unchanged for callers that do not track progress.
+     * @browserDsl Optional WireBox DSL of the browser backend to use for this
+     *           crawl only (e.g. "Playwright@sitemap-spider" for a site whose
+     *           links need JavaScript). Empty falls back to the browserDsl module
+     *           setting. A host running crawls for many sites needs this because
+     *           the setting is global but the right backend differs per site.
+     * @includeImages Collect each page's images for this crawl only. Omit the
+     *           argument to use the includeImages module setting. Passing false
+     *           turns collection off even when the setting is on.
+     * @includeHreflang Same, for each page's hreflang alternates.
+     * @includeVideos Same, for each page's videos.
      * @return A struct with the crawled pages, bad URLs, and processed URLs.
      *         processedUrls is returned as an array (its map keys) even though it
      *         is tracked internally as a set, so callers keep a simple list
@@ -108,12 +122,62 @@ component accessors=true hint="Handles crawling of website URLs" {
         required array urls,
         required array excludeUrls,
         string excludePattern = "",
-        boolean runAsync = false
+        boolean runAsync = false,
+        any progress,
+        string browserDsl = "",
+        boolean includeImages,
+        boolean includeHreflang,
+        boolean includeVideos
     ) {
 
         // Clear any state from a prior crawl on this instance (WireBox may return a
         // cached Crawler), so pages/processedUrls/queue do not accumulate.
         resetState();
+
+        // The live progress object callers can poll. When none is passed, use a
+        // fresh no-op one so every progress hook below runs against real atomics
+        // and no null checks are needed. Kept in variables scope so the private
+        // helpers (crawlUrl, appendPage, appendBadUrl) can update it.
+        variables.progress = isNull( arguments.progress )
+            ? wirebox.getInstance( "CrawlProgress@sitemap-spider" )
+            : arguments.progress;
+
+        // Take a private copy of the module settings for this crawl. settings is
+        // one shared mutable struct injected into every instance, so without this a
+        // second concurrent crawl, or a host editing settings mid-crawl, could
+        // change maxPages/maxDepth/etc. out from under this run. Every settings.X
+        // read below uses this snapshot. Generalizes the per-crawl excludePattern
+        // override set a few lines down.
+        variables.settings = duplicate( variables.settings );
+
+        // Swap the browser backend for this crawl when the caller named one.
+        // onDiComplete already resolved the one from the browserDsl setting,
+        // which is global; a host crawling many sites needs a per-site choice
+        // (most sites are fine with jsoup, a few need Playwright's JavaScript
+        // rendering). Resolved here, before loadRobots below makes the first
+        // fetch. The instance is transient, so this crawl gets its own browser.
+        if ( len( arguments.browserDsl ) ) {
+            variables.settings.browserDsl = arguments.browserDsl;
+            variables.browser = getBrowser();
+        }
+
+        // The three sitemap extension flags, for this crawl only. false is a
+        // real value for a boolean, so "did the caller pass one?" is answered
+        // by isNull rather than by an empty-string sentinel the way
+        // excludePattern does it. Writing the answer onto the settings snapshot
+        // is all it takes: crawlUrl reads settings.includeImages and friends
+        // from there.
+        if ( !isNull( arguments.includeImages ) ) {
+            variables.settings.includeImages = arguments.includeImages;
+        }
+        if ( !isNull( arguments.includeHreflang ) ) {
+            variables.settings.includeHreflang = arguments.includeHreflang;
+        }
+        if ( !isNull( arguments.includeVideos ) ) {
+            variables.settings.includeVideos = arguments.includeVideos;
+        }
+
+        variables.progress.markStarted();
 
         // Validate and set hostname from the first URL
         if ( arrayLen( arguments.urls ) == 0 ) {
@@ -197,12 +261,16 @@ component accessors=true hint="Handles crawling of website URLs" {
             if ( variables.async ) {
                 runAsyncCrawl();
             } else {
-                while ( variables.queue.len( ) ) {
+                // Stop between items when canceled; update the "remaining" gauge
+                // from the queue size so a poller sees it fall as the crawl drains.
+                while ( variables.queue.len( ) && !variables.progress.isCanceled() ) {
+                    variables.progress.setRemaining( variables.queue.len() );
                     runQueueItem();
                 }
             }
         } finally {
             browser.shutdown();
+            variables.progress.markEnded();
         }
 
         return buildCrawlResult();
@@ -350,6 +418,12 @@ component accessors=true hint="Handles crawling of website URLs" {
      * @depth The current crawl depth
      */
     private void function crawlUrl( required string url, required numeric depth ) {
+        // Bail before any work when the job was canceled. Checked here too (not
+        // only in the drain loops) so an async worker that already pulled an item
+        // does not fetch it after cancellation.
+        if ( variables.progress.isCanceled() ) {
+            return;
+        }
         if (
             depth > settings.maxDepth ||
             atMaxPages()
@@ -372,6 +446,12 @@ component accessors=true hint="Handles crawling of website URLs" {
         if ( !claimProcessed( normalizedUrl ) ) {
             return;
         }
+
+        // Count this URL as processed: claiming it means this worker is the one
+        // that fetches it. Counted here (not inside claimProcessed, which
+        // resolveEffectiveUrl also calls) so the number tracks URLs actually
+        // fetched, not claims.
+        variables.progress.incrementProcessed();
 
         // Re-check the page cap after claiming, right before the fetch. The check
         // at the top of this method can be stale in async mode (several workers
@@ -622,10 +702,12 @@ component accessors=true hint="Handles crawling of website URLs" {
             // Async keeps a ConcurrentHashMap keyed by URL for the atomic maxPages
             // reservation above; buildCrawlResult collects its values into an array.
             variables.pages.put( arguments.url, page );
+            variables.progress.incrementPages();
             return;
         }
 
         variables.pages.append( page );
+        variables.progress.incrementPages();
     }
 
     /**
@@ -728,6 +810,7 @@ component accessors=true hint="Handles crawling of website URLs" {
     }
 
     private void function appendBadUrl( required string url, required string message ) {
+        variables.progress.incrementBad();
         var entry = { "message": arguments.message };
         if ( variables.async ) {
             variables.badUrls.put( arguments.url, entry );
@@ -910,6 +993,12 @@ component accessors=true hint="Handles crawling of website URLs" {
             threadNames.append( threadName );
             thread name="#threadName#" {
                 while ( true ) {
+                    // Stop pulling work as soon as the job is canceled. Items left
+                    // in the frontier are abandoned; the join below still returns
+                    // because every worker hits this same check and exits.
+                    if ( variables.progress.isCanceled() ) {
+                        break;
+                    }
                     var item = variables.frontier.poll( javaCast( "long", 250 ), variables.pollUnit );
                     if ( isNull( item ) ) {
                         if ( variables.pending.get() == 0 ) {
@@ -923,6 +1012,8 @@ component accessors=true hint="Handles crawling of website URLs" {
                         logger.error( "Async crawl worker error on #item.url#: #e.message#", e );
                     } finally {
                         variables.pending.decrementAndGet();
+                        // Report URLs still in flight as the "remaining" gauge.
+                        variables.progress.setRemaining( variables.pending.get() );
                     }
                 }
             }

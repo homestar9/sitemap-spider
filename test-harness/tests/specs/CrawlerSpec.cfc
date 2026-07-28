@@ -65,6 +65,18 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return '<a href="#arguments.url#">#arguments.url#</a>';
 	}
 
+	// One page carrying an image, an hreflang alternate and a video, so a single
+	// fixture can prove all three extension flags.
+	private string function extensionHtml(){
+		return '<html><head><title>Extensions</title>'
+			& '<meta name="description" content="A page with everything.">'
+			& '<link rel="alternate" hreflang="es" href="https://es.example.test/">'
+			& '</head><body>'
+			& '<img src="http://example.test/photo.jpg">'
+			& '<video src="http://example.test/clip.mp4" poster="http://example.test/poster.jpg"></video>'
+			& '</body></html>';
+	}
+
 	// Wires a fan-out graph on the fake browser: root links to every url in the
 	// list, and every page links back to the first url. The first url is therefore
 	// discovered from many pages at once, which stresses the parallel crawler's
@@ -726,6 +738,103 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
+		// Task 26: each extension flag can be passed to a single crawl, which
+		// beats the module setting in both directions. Omitting the argument
+		// leaves the setting in charge.
+		describe( "crawl() per-crawl extension flag arguments", function(){
+
+			it( "collects images when the argument is true and the setting is off", function(){
+				var ctx = buildCrawler( { includeImages : false } );
+				ctx.fake.addPage( variables.root, extensionHtml() );
+
+				var result = ctx.crawler.crawl(
+					urls          = [ variables.root ],
+					excludeUrls   = [],
+					includeImages = true
+				);
+
+				expect( findPage( result.pages, variables.root ).images.len() ).toBe( 1 );
+			} );
+
+			it( "skips images when the argument is false and the setting is on", function(){
+				var ctx = buildCrawler( { includeImages : true } );
+				ctx.fake.addPage( variables.root, extensionHtml() );
+
+				var result = ctx.crawler.crawl(
+					urls          = [ variables.root ],
+					excludeUrls   = [],
+					includeImages = false
+				);
+
+				expect( findPage( result.pages, variables.root ).images.len() ).toBe( 0 );
+			} );
+
+			it( "collects alternates when the argument is true and the setting is off", function(){
+				var ctx = buildCrawler( { includeHreflang : false } );
+				ctx.fake.addPage( variables.root, extensionHtml() );
+
+				var result = ctx.crawler.crawl(
+					urls            = [ variables.root ],
+					excludeUrls     = [],
+					includeHreflang = true
+				);
+
+				expect( findPage( result.pages, variables.root ).alternates.len() ).toBe( 1 );
+			} );
+
+			it( "skips alternates when the argument is false and the setting is on", function(){
+				var ctx = buildCrawler( { includeHreflang : true } );
+				ctx.fake.addPage( variables.root, extensionHtml() );
+
+				var result = ctx.crawler.crawl(
+					urls            = [ variables.root ],
+					excludeUrls     = [],
+					includeHreflang = false
+				);
+
+				expect( findPage( result.pages, variables.root ).alternates.len() ).toBe( 0 );
+			} );
+
+			it( "collects videos when the argument is true and the setting is off", function(){
+				var ctx = buildCrawler( { includeVideos : false } );
+				ctx.fake.addPage( variables.root, extensionHtml() );
+
+				var result = ctx.crawler.crawl(
+					urls          = [ variables.root ],
+					excludeUrls   = [],
+					includeVideos = true
+				);
+
+				expect( findPage( result.pages, variables.root ).videos.len() ).toBe( 1 );
+			} );
+
+			it( "skips videos when the argument is false and the setting is on", function(){
+				var ctx = buildCrawler( { includeVideos : true } );
+				ctx.fake.addPage( variables.root, extensionHtml() );
+
+				var result = ctx.crawler.crawl(
+					urls          = [ variables.root ],
+					excludeUrls   = [],
+					includeVideos = false
+				);
+
+				expect( findPage( result.pages, variables.root ).videos.len() ).toBe( 0 );
+			} );
+
+			it( "falls back to the module settings when no flag argument is passed", function(){
+				var ctx = buildCrawler( { includeImages : true, includeHreflang : true, includeVideos : true } );
+				ctx.fake.addPage( variables.root, extensionHtml() );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+				var page   = findPage( result.pages, variables.root );
+
+				expect( page.images.len() ).toBe( 1 );
+				expect( page.alternates.len() ).toBe( 1 );
+				expect( page.videos.len() ).toBe( 1 );
+			} );
+
+		} );
+
 		// Task 23 regression: pages is an array, not a struct keyed by URL, so two
 		// URLs that differ only in path case stay separate. A struct would have
 		// merged them because CFML struct keys are case-insensitive.
@@ -746,6 +855,122 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				expect( result.pages.len() ).toBe( 3 );
 				expect( hasPage( result.pages, upperUrl ) ).toBeTrue();
 				expect( hasPage( result.pages, lowerUrl ) ).toBeTrue();
+			} );
+
+		} );
+
+		// Progress counters and cancellation are driven through the optional
+		// progress argument to crawl(). A no-op default is used when none is passed,
+		// so every other spec above proves behavior is unchanged without it.
+		describe( "crawl() progress and cancellation", function(){
+
+			// A fresh CrawlProgress to hand into crawl().
+			function progress(){
+				return getInstance( "CrawlProgress@sitemap-spider" );
+			}
+
+			it( "updates the progress counters during a crawl", function(){
+				var aUrl = variables.root & "a.cfm";
+				var bUrl = variables.root & "b.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( aUrl ) & link( bUrl ) );
+				ctx.fake.addPage( aUrl, "" );
+				ctx.fake.addPage( bUrl, "" );
+
+				var p      = progress();
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], progress = p );
+				var snap   = p.snapshot();
+
+				// root + a + b were all fetched and recorded.
+				expect( snap.pagesFound ).toBe( result.pages.len() );
+				expect( snap.pagesFound ).toBe( 3 );
+				expect( snap.urlsProcessed ).toBe( 3 );
+				expect( snap.badUrls ).toBe( 0 );
+				expect( snap.canceled ).toBeFalse();
+			} );
+
+			it( "counts a failed fetch in progress.badUrls", function(){
+				var goodUrl = variables.root & "a.cfm";
+				var badUrl  = variables.root & "b.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( goodUrl ) & link( badUrl ) );
+				ctx.fake.addPage( goodUrl, "" );
+				ctx.fake.failOn( badUrl, "boom" );
+
+				var p = progress();
+				ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], progress = p );
+
+				expect( p.snapshot().badUrls ).toBe( 1 );
+			} );
+
+			it( "records nothing when canceled before the crawl starts", function(){
+				var aUrl = variables.root & "a.cfm";
+				var bUrl = variables.root & "b.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( aUrl ) & link( bUrl ) );
+				ctx.fake.addPage( aUrl, "" );
+				ctx.fake.addPage( bUrl, "" );
+
+				var p = progress();
+				p.cancel();
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], progress = p );
+
+				// The drain loop's cancel check fires immediately, so no URL is
+				// fetched and no page is recorded.
+				expect( result.pages.len() ).toBe( 0 );
+				expect( ctx.fake.getRequestedUrls().len() ).toBe( 0 );
+				expect( p.snapshot().pagesFound ).toBe( 0 );
+			} );
+
+			it( "runs a normal crawl with no progress argument (no-op default)", function(){
+				var aUrl = variables.root & "a.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( aUrl ) );
+				ctx.fake.addPage( aUrl, "" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+				expect( result.pages.len() ).toBe( 2 );
+			} );
+
+		} );
+
+		// A host crawling many sites needs the backend chosen per site, because the
+		// browserDsl setting is global but only some sites need JavaScript rendering.
+		describe( "crawl() per-crawl browserDsl argument", function(){
+
+			it( "resolves the backend named for this crawl instead of the setting", function(){
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, "" );
+
+				// A DSL nothing is mapped to must fail while resolving the backend.
+				// That only happens if the argument is really used, which is the
+				// point: the fake browser injected over variables.browser is replaced.
+				expect( function(){
+					ctx.crawler.crawl(
+						urls        = [ variables.root ],
+						excludeUrls = [],
+						browserDsl  = "NoSuchBrowser@sitemap-spider"
+					);
+				} ).toThrow();
+			} );
+
+			it( "keeps using the configured backend when the argument is empty", function(){
+				var aUrl = variables.root & "a.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( aUrl ) );
+				ctx.fake.addPage( aUrl, "" );
+
+				// Empty means "leave it alone", so the injected fake still serves the
+				// crawl and no real HTTP happens.
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], browserDsl = "" );
+
+				expect( result.pages.len() ).toBe( 2 );
+				expect( ctx.fake.getRequestedUrls().len() ).toBe( 2 );
 			} );
 
 		} );
