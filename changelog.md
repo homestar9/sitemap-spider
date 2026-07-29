@@ -131,6 +131,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- License changed from MIT to the
+  [PolyForm Perimeter License 1.0.1](https://polyformproject.org/licenses/perimeter/1.0.1).
+  You can still use sitemap-spider in personal and commercial website projects,
+  including client work, and you can still modify and redistribute it. You
+  cannot use it to provide a competing sitemap generation product or hosted
+  sitemap generation service. The license file is now `LICENSE.md` instead of
+  `LICENSE`, and the readme has a section explaining the terms in plain English.
 - `SitemapService.create()` now builds a fresh `Crawler` for each call instead of
   reusing one injected instance. A crawler keeps the whole crawl in its own
   variables scope, so two crawls running at the same time used to overwrite each

@@ -3,7 +3,7 @@
  *
  * Produces a ForgeBox-shaped artifact under .artifacts/<projectName>/<version>/
  * containing only the runtime files consumers need (ModuleConfig.cfc,
- * helpers/, models/, lib/, box.json, readme.md, changelog.md, LICENSE).
+ * helpers/, models/, lib/, box.json, readme.md, changelog.md, LICENSE.md).
  *
  * Invoked by box.json's build:module script:
  *   task run taskFile=build/Build.cfc :projectName=sitemap-spider :version=1.0.0

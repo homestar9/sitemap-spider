@@ -10,6 +10,10 @@ honors `robots.txt`, follows redirects, and writes a
 JavaScript, an optional [cbPlaywright](https://github.com/coldbox-modules/cbPlaywright)
 backend renders the page in a headless browser first.
 
+Source-available under the [PolyForm Perimeter License 1.0.1](LICENSE.md):
+free to use in your own sites and client projects, commercial included — just
+not to build a competing sitemap product. See [License](#license).
+
 ## Requirements
 
 | Requirement | Supported |
@@ -446,6 +450,30 @@ Releases are manual (there is no CI). To cut and publish a new version:
 `.artifacts/sitemap-spider/<version>/` (a version-stamped zip plus `.sha512` and
 `.md5` checksums) without publishing — handy for inspecting a build first.
 
+## Third-party software
+
+This package bundles [jsoup](https://jsoup.org/) (`lib/jsoup-1.21.2.jar`),
+copyright Jonathan Hedley, used under the MIT License. jsoup's own terms apply
+to it, not the terms below.
+
 ## License
 
-PolyForm Perimeter 1.0.1. See [LICENSE.md](LICENSE.md).
+The complete source code is publicly available under the
+[PolyForm Perimeter License 1.0.1](LICENSE.md).
+
+In plain terms:
+
+- **You may** use this module in personal and commercial website projects,
+  including client work. You may modify it and redistribute it.
+- **You may not** use it to provide a competing sitemap generation product or
+  hosted sitemap generation service.
+
+That summary is here to save you a read. The text in
+[LICENSE.md](LICENSE.md) is what actually governs your use.
+
+sitemap-spider is not open source, and we don't describe it that way. The Open
+Source Definition doesn't allow a license to restrict a field of use, and
+PolyForm Perimeter restricts exactly one: competing with this module.
+Everything else is allowed.
+
+Copyright Angry Sam Productions, Inc.
