@@ -20,6 +20,7 @@
         "^(AGENTS|CLAUDE|DEVNOTES|RELEASE)\\.md$",
         "\\.bak$",
         "\\.(zip|tar|tar\\.gz|tgz|7z|rar)$",
+        "^.*-logo\\.avif$",
         "^\\..*"
     ],
     "engines":[

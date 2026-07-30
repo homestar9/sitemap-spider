@@ -1,5 +1,7 @@
 # sitemap-spider
 
+![Sitemap Spider Logo](https://github.com/homestar9/sitemap-spider/blob/master/sitemap-spider-logo.avif?raw=true)
+
 A ColdBox module that crawls a website and generates an XML sitemap.
 
 It starts from one or more URLs and follows links breadth-first. It honors
