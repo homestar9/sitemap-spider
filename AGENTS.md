@@ -26,6 +26,22 @@ The browser backend that fetches each URL is selected by the `browserDsl` module
 setting in `ModuleConfig.cfc` (default `Jsoup@sitemap-spider`). Browser
 implementations live in `models/browsers/` and share the `IBrowser` interface.
 
+The same crawl also feeds an optional broken link report:
+`Crawler` records each failure with its HTTP status, reason, and the pages that
+link to it → `LinkReportGenerator.generate()` → JSON saved beside the sitemap
+when `writeLinkReport` is on. Turning on `checkAssets` adds a second phase after
+the page crawl that calls `IBrowser.checkUrl()` once per unique on-host asset.
+Assets never become pages and never reach the sitemap XML.
+
+Two contract details the report depends on:
+
+- `fetchUrl()` throws `StatusCodeException` with `errorCode` set to the HTTP
+  status and `extendedInfo` set to JSON holding `status`, `url`, and `chain`.
+  `Crawler.classifyFetchError()` reads them and degrades to `status: 0` /
+  `reason: "unknown"` when a backend omits them.
+- `checkUrl()` never throws. It returns
+  `{ ok, status, url, redirectChain, error }` for every URL.
+
 ## Key Dependencies and Modules
 
 - **Runtime:** `cbjavaloader` is the only runtime dependency (`box.json`,

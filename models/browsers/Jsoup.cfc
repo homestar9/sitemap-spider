@@ -4,6 +4,9 @@ component
 {
 
     property name="jSoup" inject="javaloader:org.jsoup.Jsoup";
+    // jsoup's HTTP method enum. cbjavaloader owns the jar's classes, so this must
+    // be injected rather than built with createObject( "java", ... ).
+    property name="jSoupMethod" inject="javaloader:org.jsoup.Connection$Method";
     property name="logger" inject="logbox:logger:{this}";
 
     /**
@@ -45,7 +48,10 @@ component
             if ( hops >= settings.maxRedirects ) {
                 throw(
                     message = "Too many redirects fetching #arguments.url# (exceeded #settings.maxRedirects# hops)",
-                    type    = "TooManyRedirectsException"
+                    type    = "TooManyRedirectsException",
+                    // status 0 because no final response was ever reached.
+                    errorCode    = 0,
+                    extendedInfo = serializeJSON( { "status" : 0, "url" : currentUrl, "chain" : chain } )
                 );
             }
             hops++;
@@ -56,11 +62,18 @@ component
             currentUrl   = createObject( "java", "java.net.URL" ).init( base, javaCast( "string", location ) ).toString();
         }
 
-        // Reject a final response that is not 200.
+        // Reject a final response that is not 200. errorCode and extendedInfo carry
+        // the status and redirect steps, which the message only holds as text.
         if ( response.statusCode() != 200 ) {
             throw(
                 message = "Failed to fetch #arguments.url# HTTP request returned status code #response.statusCode()#",
-                type = "StatusCodeException"
+                type = "StatusCodeException",
+                errorCode    = response.statusCode(),
+                extendedInfo = serializeJSON( {
+                    "status" : response.statusCode(),
+                    "url"    : currentUrl,
+                    "chain"  : chain
+                } )
             );
         }
 
@@ -100,6 +113,75 @@ component
     }
 
     /**
+     * checkUrl
+     *
+     * Requests only the status of a URL, for files the crawler never fetches as
+     * pages such as images, stylesheets, and PDFs.
+     *
+     * A HEAD request avoids downloading the file. Plenty of servers reject HEAD,
+     * so a 405 or 501 retries with a GET capped at one byte, which still reads the
+     * status without pulling the body.
+     *
+     * This never throws. A connection failure returns ok=false with status 0 and
+     * the reason in error, because the crawler checks many URLs in a row and needs
+     * an answer for each one.
+     *
+     * @url URL to check.
+     */
+    struct function checkUrl( required string url ) {
+        try {
+            var response = requestStatus( arguments.url, "HEAD" );
+
+            // Retry with GET when the server refuses HEAD.
+            var status = response.statusCode();
+            if ( status == 405 || status == 501 ) {
+                response = requestStatus( arguments.url, "GET" );
+                status   = response.statusCode();
+            }
+
+            return {
+                "ok"            : status >= 200 && status < 400,
+                "status"        : status,
+                "url"           : response.url().toString(),
+                "redirectChain" : [],
+                "error"         : ""
+            };
+        } catch ( any e ) {
+            logger.warn( "Could not check #arguments.url#: #e.message#" );
+            return {
+                "ok"            : false,
+                "status"        : 0,
+                "url"           : arguments.url,
+                "redirectChain" : [],
+                "error"         : e.message
+            };
+        }
+    }
+
+    /**
+     * requestStatus
+     *
+     * Makes one request for checkUrl() and returns the jsoup response. Redirects
+     * are followed here so a moved file is not reported as broken. maxBodySize is
+     * 1 byte because only the status matters.
+     *
+     * @url URL to request.
+     * @method HTTP method, either HEAD or GET.
+     */
+    private any function requestStatus( required string url, required string method ) {
+        var httpMethod = jSoupMethod.valueOf( javaCast( "string", arguments.method ) );
+        return jSoup.connect( arguments.url )
+            .userAgent( settings.userAgent )
+            .timeout( settings.requestTimeout )
+            .ignoreContentType( true )
+            .ignoreHttpErrors( true )
+            .followRedirects( true )
+            .maxBodySize( javaCast( "int", 1 ) )
+            .method( httpMethod )
+            .execute();
+    }
+
+    /**
      * getText
      *
      * Returns the raw response body for robots.txt. A non-200 response throws
@@ -119,7 +201,8 @@ component
         if ( response.statusCode() != 200 ) {
             throw(
                 message = "Failed to fetch #arguments.url# HTTP request returned status code #response.statusCode()#",
-                type = "StatusCodeException"
+                type = "StatusCodeException",
+                errorCode = response.statusCode()
             );
         }
 

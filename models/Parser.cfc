@@ -31,19 +31,29 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     /**
      * getLinks
      *
-     * Returns unique crawlable links and on-host links marked nofollow.
-     * Off-host links, blocked URL types, and duplicates are omitted.
+     * Returns unique crawlable links, on-host links marked nofollow, and on-host
+     * files that are linked but never crawled as pages.
+     *
+     * A link can fail isUrlAllowed() for two different reasons that matter here.
+     * An off-host link is out of scope and is dropped. An on-host link that only
+     * matches notAllowedPattern, such as a PDF or an image, goes into assets so
+     * the crawler can still check whether it exists.
      *
      * @page jsoup document with a base URI or <base> tag.
-     * @return A struct with links and ignored arrays.
+     * @return A struct with links, ignored, and assets arrays.
      */
     struct function getLinks( required any page ) {
         var links   = [ ];
         var ignored = [ ];
+        var assets  = [ ];
         arguments.page.select( "a[href]" ).each( function( link, index ) {
             var linkUrl = cleanUrl( arguments.link.attr( "abs:href" ) );
             logger.info( "Found link: #linkUrl#" );
             if ( !isUrlAllowed( linkUrl ) ) {
+                // Keep on-host files so their status can still be checked.
+                if ( isSameHost( linkUrl ) && !assets.find( linkUrl ) ) {
+                    assets.append( linkUrl );
+                }
                 return; // Skip off-host URLs and blocked URL types.
             }
             if ( isNoFollow( arguments.link ) ) {
@@ -55,7 +65,50 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             }
             links.append( linkUrl );
         } );
-        return { "links": links, "ignored": ignored };
+        return { "links": links, "ignored": ignored, "assets": assets };
+    }
+
+    /**
+     * getAssetLinks
+     *
+     * Returns unique on-host URLs for files a page embeds: images, stylesheets,
+     * and scripts. The crawler checks whether each one exists.
+     *
+     * This is separate from getImages(), which builds image sitemap entries. That
+     * one includes images on other hosts and only runs when includeImages is on.
+     *
+     * @page jsoup document with a base URI or <base> tag.
+     */
+    array function getAssetLinks( required any page ) {
+        var assets = [];
+        var seen   = {};
+
+        // Each pair is a jsoup selector and the attribute holding its URL.
+        var sources = [
+            { "selector": "img[src]",                    "attribute": "src" },
+            { "selector": "link[rel=stylesheet][href]",  "attribute": "href" },
+            { "selector": "script[src]",                 "attribute": "src" }
+        ];
+
+        for ( var source in sources ) {
+            var elements = arguments.page.select( source.selector );
+            for ( var element in elements ) {
+                // Check the raw value first: jsoup resolves an empty src to the
+                // page URL, and a data: value is inline content with nothing to
+                // request.
+                var raw = trim( element.attr( source.attribute ) );
+                if ( !len( raw ) || left( raw, 5 ) == "data:" ) {
+                    continue;
+                }
+                var assetUrl = cleanUrl( trim( element.attr( "abs:" & source.attribute ) ) );
+                if ( !len( assetUrl ) || !isSameHost( assetUrl ) || seen.keyExists( assetUrl ) ) {
+                    continue;
+                }
+                seen[ assetUrl ] = true;
+                assets.append( assetUrl );
+            }
+        }
+        return assets;
     }
 
     /**
@@ -838,6 +891,19 @@ component accessors=true hint="Parses HTML content to extract links and metadata
      * @url URL to check.
      */
     boolean function isUrlAllowed( required string url ) {
+        return isSameHost( arguments.url ) && !reFindNoCase( settings.notAllowedPattern, arguments.url );
+    }
+
+    /**
+     * isSameHost
+     *
+     * Returns whether a URL uses HTTP or HTTPS and matches hostName. Unlike
+     * isUrlAllowed() this ignores notAllowedPattern, so it still returns true for
+     * an on-host file the crawler will not fetch as a page, such as an image.
+     *
+     * @url URL to check.
+     */
+    boolean function isSameHost( required string url ) {
         if ( !len( arguments.url ) ) {
             return false;
         }
@@ -848,9 +914,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
 
             logger.info( "Checking URL: #arguments.url#, Protocol: #protocol#, Host: #host#" );
 
-            return ( protocol == "http" || protocol == "https" ) &&
-                host == variables.hostName &&
-                !reFindNoCase( settings.notAllowedPattern, arguments.url );
+            return ( protocol == "http" || protocol == "https" ) && host == variables.hostName;
         } catch ( any e ) {
             return false;
         }

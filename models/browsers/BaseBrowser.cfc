@@ -1,6 +1,8 @@
 component {
 
     property name="settings" inject="coldbox:moduleSettings:sitemap-spider";
+    // Resolves the Jsoup backend for the default checkUrl() below.
+    property name="wirebox" inject="wirebox";
 
     /**
      * buildResult
@@ -28,6 +30,21 @@ component {
             result.html = arguments.body;
         }
         return result;
+    }
+
+    /**
+     * checkUrl
+     *
+     * Asks the Jsoup backend for a URL's status. Reading a status code needs no
+     * JavaScript, so a rendering backend such as Playwright inherits this instead
+     * of driving a real browser to check an image.
+     *
+     * Jsoup overrides this with its own request.
+     *
+     * @url URL to check.
+     */
+    struct function checkUrl( required string url ) {
+        return wirebox.getInstance( "Jsoup@sitemap-spider" ).checkUrl( arguments.url );
     }
 
     /**

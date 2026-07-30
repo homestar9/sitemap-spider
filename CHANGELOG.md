@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A broken link report, saved as JSON beside the sitemap. A crawl already visits
+  every page, so it already knows which links are dead; the report saves that
+  instead of discarding it. `writeLinkReport` (setting and per-crawl argument,
+  default off) writes `broken`, `redirects`, and `skipped` lists plus a `summary`
+  of counts. The new `linkReportPath` setting supplies a private default
+  location; when empty, `<filePath minus .gz>.links.json` is written beside the
+  sitemap, following the same rules as the metadata sidecar. Read it back with
+  `SitemapService.readLinkReport( path )`, which accepts either path and returns
+  `{ exists : false }` when the file is missing or unreadable. A failed write
+  throws the typed `sitemap-spider.LinkReportSaveFailed`. The result struct
+  gained `linkReportPath` and `linkReportSaved`; `queue()` passes both arguments
+  through, stores them on the job record, and returns them in `result`.
+  Reporting broken pages costs no extra HTTP requests.
+- `models/LinkReportGenerator.cfc`, a stateless singleton that turns a crawl
+  result into the report struct. It sorts `broken` with server errors first,
+  then missing pages, then transport failures, and marks a `redirects` entry
+  `permanent` for a 301 or 308.
+- Failure detail on every `badUrls` entry. Alongside the existing `message`,
+  each entry now carries `status` (the HTTP status, or `0` when the request
+  never got a response), `reason`, `kind` (`"page"` or `"asset"`),
+  `redirectChain`, `foundOn`, and `foundOnTruncated`. `reason` is one of
+  `notFound`, `serverError`, `clientError`, `redirectError`,
+  `tooManyRedirects`, `timeout`, `connectionFailed`, or `unknown`. Previously a
+  404, a 500, a timeout, and a redirect loop were indistinguishable without
+  parsing English out of `message`.
+- `foundOn` names the pages that link to a broken or redirected URL, which is
+  what makes a report actionable. `trackInboundLinks` (default on) and
+  `maxInboundLinks` (default 10) control it. Referrers are dropped as URLs are
+  fetched successfully, so memory tracks the queue and the failures rather than
+  every link on the site. A redirected URL keeps its referrers, because those
+  are the links worth updating.
+- `checkAssets` setting (default off) requests the status of on-host images,
+  stylesheets, scripts, and links to files that `notAllowedPattern` blocks —
+  broken images were previously invisible. Checks run after the page crawl, so
+  each unique asset is requested once no matter how many pages use it. They use
+  `HEAD`, falling back to a one-byte `GET` on a 405 or 501, never enter `pages`
+  or `maxPages` or the sitemap XML, and ignore off-host URLs. `maxAssetChecks`
+  (default 5000) caps them. This is the only part of the report that makes extra
+  requests.
+- `stats` gained `assetsCheckedCount` and `assetsBrokenCount`. The crawl result
+  gained `assetsChecked`.
+- `redirects` entries gained `status` (the first hop's status), `foundOn`, and
+  `foundOnTruncated`.
+
+### Changed
+
+- **Breaking for custom browser backends.** `IBrowser` now requires
+  `checkUrl( url )`, which returns `{ ok, status, url, redirectChain, error }`
+  and must never throw. A backend extending `BaseBrowser` inherits a working
+  implementation that asks the jsoup backend for the status, so no change is
+  needed there. A backend implementing `IBrowser` directly must add the method.
+- `fetchUrl()` implementations should now set `errorCode` (the HTTP status) and
+  `extendedInfo` (JSON with `status`, `url`, and `chain`) on a thrown
+  `StatusCodeException`. Both bundled backends do. A backend that omits them
+  still crawls correctly; its failures report `status: 0` and
+  `reason: "unknown"`.
+- `Parser.getLinks()` returns a third array, `assets`: on-host links rejected
+  only by `notAllowedPattern`. Off-host links are still dropped. Added
+  `Parser.getAssetLinks()` for embedded images, stylesheets, and scripts, and
+  `Parser.isSameHost()`, which `isUrlAllowed()` now builds on.
+- The Playwright backend now builds its redirect chain before checking the
+  status, so a failed navigation reports the hops that led to it.
+
 ----
 
 ## [1.0.0] - 2026-07-30

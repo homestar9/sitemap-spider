@@ -3,6 +3,7 @@ component
 {
 
     property name="generator" inject="SitemapGenerator@sitemap-spider";
+    property name="linkReportGenerator" inject="LinkReportGenerator@sitemap-spider";
     property name="settings" inject="coldbox:moduleSettings:sitemap-spider";
     // Supplies the module version written to metadata files.
     property name="moduleConfig" inject="coldbox:moduleConfig:sitemap-spider";
@@ -45,6 +46,10 @@ component
      * @metadataPath Full metadata path. An explicit empty string derives the
      *   path from filePath.
      * @metadataIncludeUrls Includes the badUrls and ignored arrays in metadata.
+     * @writeLinkReport Saves a JSON report of broken links, redirects, and
+     *   skipped URLs after the sitemap.
+     * @linkReportPath Full report path. An explicit empty string derives the path
+     *   from filePath.
      * @return The crawl results, generated XML, file details, and statistics.
      */
     struct function create(
@@ -62,7 +67,9 @@ component
         boolean includeVideos, // Defaults to settings.includeVideos below
         boolean writeMetadata, // Defaults to settings.writeMetadata below
         string metadataPath, // Omitted uses settings.metadataPath; explicit empty derives from filePath
-        boolean metadataIncludeUrls // Defaults to settings.metadataIncludeUrls below
+        boolean metadataIncludeUrls, // Defaults to settings.metadataIncludeUrls below
+        boolean writeLinkReport, // Defaults to settings.writeLinkReport below
+        string linkReportPath // Omitted uses settings.linkReportPath; explicit empty derives from filePath
     ) {
         // Use the module setting when runAsync was not passed.
         param name="arguments.runAsync" default="#settings.runAsync#";
@@ -77,6 +84,11 @@ component
         param name="arguments.writeMetadata" default="#settings.writeMetadata#";
         param name="arguments.metadataPath" default="#settings.metadataPath#";
         param name="arguments.metadataIncludeUrls" default="#settings.metadataIncludeUrls#";
+
+        // param preserves an explicit empty linkReportPath the same way, so it can
+        // mean "save beside the sitemap."
+        param name="arguments.writeLinkReport" default="#settings.writeLinkReport#";
+        param name="arguments.linkReportPath" default="#settings.linkReportPath#";
 
         var start = getTickCount();
 
@@ -203,6 +215,34 @@ component
             }
         }
 
+        // Save the link report when enabled and a path can be found.
+        var linkReportTarget = "";
+        var linkReportSaved  = false;
+        if ( arguments.writeLinkReport && ( len( arguments.filePath ) || len( arguments.linkReportPath ) ) ) {
+            linkReportTarget = len( arguments.linkReportPath )
+                ? arguments.linkReportPath
+                : defaultLinkReportPath( arguments.filePath );
+            var linkReport = linkReportGenerator.generate(
+                crawlResult   = result,
+                site          = urlArray[ 1 ],
+                // A development build may not have a stamped version.
+                moduleVersion = moduleConfig.keyExists( "version" ) ? moduleConfig.version : "",
+                generatedAt   = stats.generatedAt
+            );
+            try {
+                // The report is always plain JSON, even when the sitemap is gzipped.
+                generator.saveToFile( serializeJSON( linkReport ), linkReportTarget, false );
+                linkReportSaved = true;
+            } catch ( any e ) {
+                logger.error( "Failed to save link report to #linkReportTarget#: #e.message#", e );
+                throw(
+                    type = "sitemap-spider.LinkReportSaveFailed",
+                    message = "Could not save link report to '#linkReportTarget#'",
+                    detail = e.message
+                );
+            }
+        }
+
         return {
             "pages": result.pages,
             "sitemap": setResult.xml,
@@ -221,7 +261,10 @@ component
             "saved": saved,
             // Return an empty path when no metadata file was written.
             "metadataPath": metadataTarget,
-            "metadataSaved": metadataSaved
+            "metadataSaved": metadataSaved,
+            // Return an empty path when no link report was written.
+            "linkReportPath": linkReportTarget,
+            "linkReportSaved": linkReportSaved
         };
     }
 
@@ -254,6 +297,34 @@ component
     }
 
     /**
+     * readLinkReport
+     *
+     * Reads a saved link report and adds exists=true to the returned struct.
+     * A sitemap path resolves through the linkReportPath setting or its derived
+     * sidecar name. Missing or invalid JSON returns { "exists": false }.
+     */
+    struct function readLinkReport( required string path ) {
+        // Treat any path without .links.json as a sitemap path.
+        var target = arguments.path;
+        if ( right( target, 11 ) != ".links.json" ) {
+            target = len( settings.linkReportPath )
+                ? settings.linkReportPath
+                : defaultLinkReportPath( target );
+        }
+        if ( !fileExists( target ) ) {
+            return { "exists": false };
+        }
+        var raw = fileRead( target );
+        if ( !isJSON( raw ) ) {
+            logger.warn( "Link report at #target# is not readable JSON" );
+            return { "exists": false };
+        }
+        var report = deserializeJSON( raw );
+        report[ "exists" ] = true;
+        return report;
+    }
+
+    /**
      * buildStats
      *
      * Returns the counts stored in the result and metadata file. Quoted keys
@@ -273,8 +344,29 @@ component
             "type": arguments.setResult.type,
             "badUrlCount": structCount( arguments.crawlResult.badUrls ),
             "ignoredCount": arguments.crawlResult.ignored.len(),
-            "redirectCount": arguments.crawlResult.redirects.len()
+            "redirectCount": arguments.crawlResult.redirects.len(),
+            // Assets are files the crawler checked but never added to the sitemap.
+            "assetsCheckedCount": arguments.crawlResult.assetsChecked,
+            "assetsBrokenCount": countBadAssets( arguments.crawlResult.badUrls )
         };
+    }
+
+    /**
+     * countBadAssets
+     *
+     * Returns how many failed URLs were assets rather than pages.
+     *
+     * @badUrls The crawl's badUrls struct.
+     */
+    private numeric function countBadAssets( required struct badUrls ) {
+        var count = 0;
+        for ( var badUrl in arguments.badUrls ) {
+            var entry = arguments.badUrls[ badUrl ];
+            if ( entry.keyExists( "kind" ) && entry.kind == "asset" ) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
@@ -350,11 +442,33 @@ component
      * Removes a trailing .gz and appends .meta.json to a sitemap path.
      */
     private string function defaultMetadataPath( required string sitemapPath ) {
+        return sidecarPath( arguments.sitemapPath, ".meta.json" );
+    }
+
+    /**
+     * defaultLinkReportPath
+     *
+     * Removes a trailing .gz and appends .links.json to a sitemap path.
+     */
+    private string function defaultLinkReportPath( required string sitemapPath ) {
+        return sidecarPath( arguments.sitemapPath, ".links.json" );
+    }
+
+    /**
+     * sidecarPath
+     *
+     * Builds a sidecar file path beside a sitemap. The .gz suffix is removed first
+     * so a compressed sitemap does not produce a name like sitemap.xml.gz.meta.json.
+     *
+     * @sitemapPath Path of the sitemap the sidecar belongs to.
+     * @suffix Suffix for the sidecar, including its leading dot.
+     */
+    private string function sidecarPath( required string sitemapPath, required string suffix ) {
         var base = arguments.sitemapPath;
         if ( right( base, 3 ) == ".gz" ) {
             base = left( base, len( base ) - 3 );
         }
-        return base & ".meta.json";
+        return base & arguments.suffix;
     }
 
     /**
