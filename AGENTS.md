@@ -31,8 +31,6 @@ implementations live in `models/browsers/` and share the `IBrowser` interface.
 - **Runtime:** `cbjavaloader` is the only runtime dependency (`box.json`,
   `ModuleConfig.cfc`). Its `onLoad()` loads the jsoup jar from `lib/` so the
   Jsoup browser can parse HTML.
-- **Dev-only (CommandBox):** `commandbox-cfformat` (code formatting),
-  `commandbox-docbox` (docs), `commandbox-dotenv`, `commandbox-cfconfig`.
 
 ## Project-Specific Conventions
 
@@ -49,6 +47,7 @@ implementations live in `models/browsers/` and share the `IBrowser` interface.
 - **Method Comments:** Every method in a component (public and private) should have a docblock comment above it describing its purpose and any non-obvious behavior. Keep them concise — one short paragraph or a few bullet points is sufficient.
 - **Handler Scopes:** `rc` = raw request input only (use `param` for defaults, never mutate). `prc` = all normalized/validated/derived values. `var`/`local` = throwaway intermediates only.
 - **Avoid Value Pairs Routing**: Set `valuePairTranslation( false )` and avoid extra name-value pairs in the URL. Example: prefer `/users/123` over `/users/id/123`. 
+- **Do not run cfformat** - The user will run it manually when needed.
 
 ### Gotchas to watch out for
 
