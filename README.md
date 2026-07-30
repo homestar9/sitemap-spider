@@ -131,12 +131,12 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `browserDsl` | `"Jsoup@sitemap-spider"` | Which browser backend fetches each URL. Set to `"Playwright@sitemap-spider"` for JavaScript rendering. |
 | `maxDepth` | `10` | Maximum link distance from a start URL to crawl. |
 | `maxPages` | `1000` | Maximum number of pages to record in one crawl. |
-| `respectRobotsTxt` | `true` | When true, fetches `robots.txt` and honors its `Disallow` / `Allow` rules and `Crawl-delay`. |
+| `respectRobotsTxt` | `true` | When true, fetches `robots.txt` and honors its prefix-matched `Disallow` / `Allow` rules and `Crawl-delay`. A trailing slash is significant: `/admin/` does not match `/admin`. |
 | `respectNoIndex` | `true` | When true, a page carrying `<meta name="robots" content="noindex">` (or `none`) or an `X-Robots-Tag: noindex` response header is left out of the sitemap and reported in `ignored` with reason `"noindex"`. Its links are still followed, because `noindex` does not mean `nofollow`. An agent-scoped header directive (`googlebot: noindex`) counts as a global one on purpose. `false` lists such pages anyway. |
 | `userAgent` | `"sitemap-spider"` | Sent on every fetch, and matched against `robots.txt` `User-agent` groups. |
 | `maxCrawlDelay` | `10` | Upper cap, in seconds, on the `robots.txt` `Crawl-delay` actually applied between fetches. A `Crawl-delay` no longer forces a single-threaded crawl: a parallel crawl still honors it by spacing fetches this far apart across the workers. |
 | `notAllowedPattern` | `\.(png\|webp\|svg\|gif\|js\|css\|jpg\|jpeg)$\|javascript:\|mailto:\|tel:` | Links matching this regex are never crawled (asset files and non-HTTP schemes). |
-| `excludePattern` | `""` (empty) | Regex matched case-insensitively against the full URL for whole-section excludes (e.g. `/admin/`). A match skips the URL and reports it in `ignored` with reason `"excluded"`. Separate from the per-crawl exact-URL `excludeUrls` argument. Empty means no pattern exclusion. The `create()` `excludePattern` argument overrides this setting for a single crawl. |
+| `excludePattern` | `""` (empty) | Regex matched case-insensitively against the full URL for whole-section excludes (e.g. `/admin(?:/|\?|$)`). A match skips the URL and reports it in `ignored` with reason `"excluded"`. Separate from the per-crawl exact-URL `excludeUrls` argument. Empty means no pattern exclusion. The `create()` `excludePattern` argument overrides this setting for a single crawl. |
 | `priority` | `1.0` | `<priority>` assigned to the start URL. |
 | `priorityDecrement` | `0.1` | How much `<priority>` drops per level of depth. |
 | `maxUrlsPerSitemap` | `50000` | sitemaps.org per-file URL limit. Above this the output splits into a sitemap index. |

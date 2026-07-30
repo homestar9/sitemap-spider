@@ -32,10 +32,11 @@ component
      *   base URL are all taken from the first `url`, not from seedUrls.
      * @excludeUrls Array of URLs to exclude from crawling
      * @excludePattern Optional regex for whole-section excludes, matched
-     *   case-insensitively against the full URL (e.g. "/admin/"). When non-empty it
-     *   overrides the excludePattern module setting for this crawl only; empty falls
-     *   back to the setting. A match skips the URL and reports it in `ignored` with
-     *   reason "excluded". Separate from the exact-URL excludeUrls argument.
+     *   case-insensitively against the full URL (e.g. "/admin(?:/|\?|$)"). When
+     *   non-empty it overrides the excludePattern module setting for this crawl
+     *   only; empty falls back to the setting. A match skips the URL and reports
+     *   it in `ignored` with reason "excluded". Separate from the exact-URL
+     *   excludeUrls argument.
      * @filePath Optional full path to save the sitemap XML to. When set, the XML
      *   is written there (creating the directory if needed) and the return struct
      *   reports saved=true. A write failure throws sitemap-spider.SaveFailed. When

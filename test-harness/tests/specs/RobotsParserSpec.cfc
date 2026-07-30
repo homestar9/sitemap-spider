@@ -51,6 +51,19 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					expect( p.isPathAllowed( "/contact.cfm" ) ).toBeTrue();
 				} );
 
+				it( "does not let a trailing slash rule block its slashless sibling", function(){
+					var p = parserFor( "User-agent: *#chr(10)#Disallow: /admin/" );
+					expect( p.isPathAllowed( "/admin/users" ) ).toBeFalse();
+					expect( p.isPathAllowed( "/admin" ) ).toBeTrue();
+				} );
+
+				it( "treats a slashless rule as a broad prefix match", function(){
+					var p = parserFor( "User-agent: *#chr(10)#Disallow: /admin" );
+					expect( p.isPathAllowed( "/admin" ) ).toBeFalse();
+					expect( p.isPathAllowed( "/admin/users" ) ).toBeFalse();
+					expect( p.isPathAllowed( "/administrator" ) ).toBeFalse();
+				} );
+
 				it( "allows everything when Disallow has an empty value", function(){
 					var p = parserFor( "User-agent: *#chr(10)#Disallow:" );
 					expect( p.isPathAllowed( "/anything.cfm" ) ).toBeTrue();

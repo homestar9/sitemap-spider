@@ -86,6 +86,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 						.toBe( "http://example.test/a.cfm" );
 				} );
 
+				it( "collapses repeated path slashes but preserves a trailing slash", function(){
+					expect( variables.parser.cleanUrl( "http://example.test//about/" ) )
+						.toBe( "http://example.test/about/" );
+				} );
+
 			} );
 
 			// Task 16 folded the URL normalization policy into cleanUrl's final
@@ -129,6 +134,17 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				it( "is idempotent on an already-normalized URL", function(){
 					var once = variables.parser.cleanUrl( "HTTP://EXAMPLE.TEST/MyPage.CFM?jsessionid=Z&id=5" );
 					expect( variables.parser.cleanUrl( once ) ).toBe( once );
+				} );
+
+				it( "keeps slashless and trailing-slash paths distinct and idempotent", function(){
+					var slashless = variables.parser.cleanUrl( "http://example.test/about" );
+					var trailing  = variables.parser.cleanUrl( "http://example.test/about/" );
+
+					expect( slashless ).toBe( "http://example.test/about" );
+					expect( trailing ).toBe( "http://example.test/about/" );
+					expect( trailing ).notToBe( slashless );
+					expect( variables.parser.cleanUrl( slashless ) ).toBe( slashless );
+					expect( variables.parser.cleanUrl( trailing ) ).toBe( trailing );
 				} );
 
 			} );

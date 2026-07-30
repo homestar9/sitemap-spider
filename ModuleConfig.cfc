@@ -118,9 +118,10 @@ component {
             // the full URL. A match skips the URL, which is then reported in the
             // crawl result's "ignored" list with reason "excluded". Empty means no
             // pattern exclusion. This is separate from the per-crawl excludeUrls
-            // argument, which is an exact whole-URL match. Example: "/admin/". The
-            // SitemapService.create( excludePattern = ) argument overrides this for
-            // a single crawl.
+            // argument, which is an exact whole-URL match. Example:
+            // "/admin(?:/|\?|$)" covers /admin, its query form, and descendants
+            // without also matching /administrator. The SitemapService.create(
+            // excludePattern = ) argument overrides this for a single crawl.
             excludePattern : "",
             // Query-param and ;jsessionid path-param names stripped by
             // Parser.normalizeUrl so session tokens and tracking params never
