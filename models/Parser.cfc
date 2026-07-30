@@ -293,20 +293,23 @@ component accessors=true hint="Parses HTML content to extract links and metadata
      * must be used because text() does not return script contents.
      */
     private array function jsonLdVideoObjects( required any page ) {
-        var found = [ ];
+        // Adobe ColdFusion copies an array passed to a function, so appending to
+        // one inside collectVideoObjects() would be lost. Structs are passed by
+        // reference on every engine, so the list is held in one.
+        var collected = { "items": [ ] };
         for ( var block in arguments.page.select( "script[type=application/ld+json]" ) ) {
             var raw = trim( block.data() );
             if ( !len( raw ) || !isJSON( raw ) ) {
                 continue;
             }
             try {
-                collectVideoObjects( deserializeJSON( raw ), found, 0 );
+                collectVideoObjects( deserializeJSON( raw ), collected, 0 );
             } catch ( any e ) {
                 // Skip a value the current engine could not deserialize.
                 logger.debug( "Skipping unreadable JSON-LD block: #e.message#" );
             }
         }
-        return found;
+        return collected.items;
     }
 
     /**
@@ -316,16 +319,16 @@ component accessors=true hint="Parses HTML content to extract links and metadata
      * result limits prevent a large script from delaying the crawl.
      *
      * @node JSON-LD value to walk.
-     * @found Array that receives each match.
+     * @collected Struct with an "items" array that receives each match.
      * @depth How far into the document this call is.
      */
-    private void function collectVideoObjects( required any node, required array found, numeric depth = 0 ) {
-        if ( arguments.depth > 10 || arguments.found.len() >= 100 ) {
+    private void function collectVideoObjects( required any node, required struct collected, numeric depth = 0 ) {
+        if ( arguments.depth > 10 || arguments.collected.items.len() >= 100 ) {
             return;
         }
         if ( isArray( arguments.node ) ) {
             for ( var item in arguments.node ) {
-                collectVideoObjects( item, arguments.found, arguments.depth + 1 );
+                collectVideoObjects( item, arguments.collected, arguments.depth + 1 );
             }
             return;
         }
@@ -333,10 +336,10 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             return;
         }
         if ( isVideoObject( arguments.node ) ) {
-            arguments.found.append( arguments.node );
+            arguments.collected.items.append( arguments.node );
         }
         for ( var key in arguments.node ) {
-            collectVideoObjects( arguments.node[ key ], arguments.found, arguments.depth + 1 );
+            collectVideoObjects( arguments.node[ key ], arguments.collected, arguments.depth + 1 );
         }
     }
 
