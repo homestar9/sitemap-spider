@@ -33,12 +33,10 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	/**
 	 * buildCrawler
 	 *
-	 * Builds a fresh Crawler wired to a fresh FakeBrowser. crawl() mutates
-	 * instance state, so every scenario needs its own crawler.
+	 * Builds a fresh Crawler and FakeBrowser. crawl() changes instance state, so
+	 * each scenario needs its own Crawler.
 	 *
-	 * @settingOverrides Keys to override on a copy of the module settings
-	 *                   (e.g. { maxDepth: 1 }). The real settings struct is left
-	 *                   untouched so scenarios stay isolated.
+	 * @settingOverrides Module setting values to replace on a private copy.
 	 */
 	private struct function buildCrawler( struct settingOverrides = {} ){
 		var fake    = new tests.resources.FakeBrowser();
@@ -56,23 +54,19 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return { crawler : crawler, fake : fake };
 	}
 
-	// Builds an <a href> tag with an absolute href (relative hrefs would not
-	// resolve, since the Parser parses page html with no base URI).
 	/**
 	 * link
 	 *
-	 * Returns an HTML link for a URL.
+	 * Returns an absolute HTML link. Fake pages have no base URI for relative URLs.
 	 */
 	private string function link( required string url ){
 		return '<a href="#arguments.url#">#arguments.url#</a>';
 	}
 
-	// One page carrying an image, an hreflang alternate and a video, so a single
-	// fixture can prove all three extension flags.
 	/**
 	 * extensionHtml
 	 *
-	 * Returns HTML containing every supported sitemap extension.
+	 * Returns HTML with an image, hreflang alternate, and video.
 	 */
 	private string function extensionHtml(){
 		return '<html><head><title>Extensions</title>'
@@ -84,14 +78,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			& '</body></html>';
 	}
 
-	// Wires a fan-out graph on the fake browser: root links to every url in the
-	// list, and every page links back to the first url. The first url is therefore
-	// discovered from many pages at once, which stresses the parallel crawler's
-	// atomic claim (it must be recorded exactly once, not once per discovery).
 	/**
 	 * wireGraph
 	 *
-	 * Adds a linked page graph to FakeBrowser.
+	 * Adds a page graph where every child links to the first child. Parallel
+	 * workers must claim that shared URL only once.
 	 */
 	private void function wireGraph( required any fake, required array urls ){
 		var body = "";
@@ -104,11 +95,6 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		}
 	}
 
-	// result.pages is now an array of page structs (each with a url field), not a
-	// struct keyed by URL, so these two helpers replace the old toHaveKey/
-	// structKeyArray idioms.
-
-	// Every page's url field, for set comparisons.
 	/**
 	 * pageUrls
 	 *
@@ -122,13 +108,10 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return out;
 	}
 
-	// True when some page's url matches exactly. compare() is used (not ==) so the
-	// match is case-sensitive, mirroring the crawl's case-sensitive dedup — /Page
-	// and /page are distinct pages.
 	/**
 	 * hasPage
 	 *
-	 * Returns whether the page array contains a URL.
+	 * Checks for an exact URL. compare() keeps /Page and /page distinct.
 	 */
 	private boolean function hasPage( required array pages, required string url ){
 		for ( var page in arguments.pages ){
@@ -139,12 +122,10 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return false;
 	}
 
-	// Returns the page struct whose url matches exactly, or an empty struct so a
-	// missing page fails the spec's assertions instead of throwing.
 	/**
 	 * findPage
 	 *
-	 * Returns the page struct for a URL.
+	 * Returns the page for an exact URL, or an empty struct when missing.
 	 */
 	private struct function findPage( required array pages, required string url ){
 		for ( var page in arguments.pages ){
@@ -414,10 +395,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		describe( "crawl() in parallel (runAsync=true)", function(){
 
-			// Wire a wider fan-out graph than the sample site so the parallel
-			// claim is exercised on many URLs discovered at once. Crawl it once
-			// synchronously and once in parallel and assert the recorded page set
-			// matches, regardless of the (now nondeterministic) visit order.
+			// Compare page sets because parallel fetch order is not deterministic.
 			it( "records the same pages as a synchronous crawl, regardless of order", function(){
 				var linked = [];
 				for ( var i = 1; i <= 8; i++ ){
@@ -460,10 +438,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 			it( "still runs in parallel when robots.txt sets a Crawl-delay, spacing the fetches", function(){
-				// A Crawl-delay no longer forces sync: the crawl runs in parallel
-				// and applyCrawlDelay spaces the fetches across the workers. Use a
-				// tiny delay (maxCrawlDelay caps it) and a small graph so the test
-				// stays fast while still exercising the spaced-slot path.
+				// Crawl-delay spaces parallel fetches. Use a small capped delay.
 				var ctx = buildCrawler( { maxCrawlDelay : 1 } );
 				ctx.fake.setRobots( "User-agent: *" & chr( 10 ) & "Crawl-delay: 1" );
 				var linked = [];
@@ -480,9 +455,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 			it( "never records more than maxPages under parallel crawling", function(){
-				// A wide fan-out means several workers pass the approximate
-				// atMaxPages() check at once; the atomic reservation in appendPage
-				// must still cap the recorded count at exactly maxPages.
+				// appendPage() must enforce maxPages when workers finish together.
 				var ctx = buildCrawler( { maxPages : 3 } );
 				var linked = [];
 				for ( var i = 1; i <= 20; i++ ){
@@ -954,17 +927,14 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
-		// A host crawling many sites needs the backend chosen per site, because the
-		// browserDsl setting is global but only some sites need JavaScript rendering.
+		// A create() call can override the module's browserDsl setting.
 		describe( "crawl() per-crawl browserDsl argument", function(){
 
 			it( "resolves the backend named for this crawl instead of the setting", function(){
 				var ctx = buildCrawler();
 				ctx.fake.addPage( variables.root, "" );
 
-				// A DSL nothing is mapped to must fail while resolving the backend.
-				// That only happens if the argument is really used, which is the
-				// point: the fake browser injected over variables.browser is replaced.
+				// An unknown DSL proves the call replaced the injected fake.
 				expect( function(){
 					ctx.crawler.crawl(
 						urls        = [ variables.root ],
@@ -1047,8 +1017,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				var ctx = buildCrawler();
 				ctx.fake.addPage( variables.root, link( movedUrl ) );
-				// The chain ends at a URL that 404s, so the steps would be lost if
-				// the crawler only kept the exception message.
+				// Keep the redirect steps from the failed request.
 				ctx.fake.failOn(
 					url     = movedUrl,
 					message = "not found",
@@ -1070,8 +1039,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				var ctx = buildCrawler();
 				ctx.fake.addPage( variables.root, link( badUrl ) );
-				// No status argument, which is what an older custom browser backend
-				// would produce. The crawl must still finish.
+				// Simulate a browser backend that omits status details.
 				ctx.fake.failOn( badUrl, "boom" );
 
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
@@ -1236,8 +1204,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			it( "checks a stylesheet, a script, and a directly linked image", function(){
 				var cssUrl   = variables.root & "site.css";
 				var jsUrl    = variables.root & "site.js";
-				// notAllowedPattern blocks .jpg, so this link is never crawled as a
-				// page. Before assets were collected it was dropped and never seen.
+				// notAllowedPattern blocks .jpg, so only the asset check sees it.
 				var photoUrl = variables.root & "photo.jpg";
 
 				var ctx = buildCrawler( { checkAssets : true } );

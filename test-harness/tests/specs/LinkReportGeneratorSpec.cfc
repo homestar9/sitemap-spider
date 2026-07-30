@@ -1,7 +1,5 @@
 /**
- * Tests the link report shape, its summary counts, and its sort order. These are
- * unit tests: each one hands LinkReportGenerator a crawl result built by hand, so
- * no crawling or HTTP happens.
+ * Tests link report fields, counts, and sorting without making HTTP requests.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
@@ -81,6 +79,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		};
 	}
 
+	/**
+	 * run
+	 *
+	 * Defines the LinkReportGeneratorSpec examples.
+	 */
 	function run(){
 
 		describe( "generate() report shape", function(){
@@ -141,7 +144,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				expect( report.summary.pagesChecked ).toBe( 2 );
 				expect( report.summary.assetsChecked ).toBe( 3 );
-				// checked is pages plus assets.
+				// checked includes pages and assets.
 				expect( report.summary.checked ).toBe( 5 );
 				expect( report.summary.broken ).toBe( 2 );
 				expect( report.summary.brokenAssets ).toBe( 1 );
@@ -176,7 +179,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					] )
 				);
 
-				// Permanent moves sort first, so this is the 301.
+				// Permanent redirects sort first.
 				expect( report.redirects[ 1 ].status ).toBe( 301 );
 				expect( report.redirects[ 1 ].permanent ).toBeTrue();
 				expect( report.redirects[ 2 ].permanent ).toBeFalse();

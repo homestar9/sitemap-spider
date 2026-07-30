@@ -31,13 +31,9 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     /**
      * getLinks
      *
-     * Returns unique crawlable links, on-host links marked nofollow, and on-host
-     * files that are linked but never crawled as pages.
-     *
-     * A link can fail isUrlAllowed() for two different reasons that matter here.
-     * An off-host link is out of scope and is dropped. An on-host link that only
-     * matches notAllowedPattern, such as a PDF or an image, goes into assets so
-     * the crawler can still check whether it exists.
+     * Returns crawlable links, nofollow entries, and on-host asset links.
+     * Off-host URLs are dropped. On-host URLs blocked by notAllowedPattern enter
+     * assets so checkAssets() can test them.
      *
      * @page jsoup document with a base URI or <base> tag.
      * @return A struct with links, ignored, and assets arrays.
@@ -50,7 +46,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             var linkUrl = cleanUrl( arguments.link.attr( "abs:href" ) );
             logger.info( "Found link: #linkUrl#" );
             if ( !isUrlAllowed( linkUrl ) ) {
-                // Keep on-host files so their status can still be checked.
+                // Keep blocked on-host files for asset checking.
                 if ( isSameHost( linkUrl ) && !assets.find( linkUrl ) ) {
                     assets.append( linkUrl );
                 }
@@ -71,11 +67,8 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     /**
      * getAssetLinks
      *
-     * Returns unique on-host URLs for files a page embeds: images, stylesheets,
-     * and scripts. The crawler checks whether each one exists.
-     *
-     * This is separate from getImages(), which builds image sitemap entries. That
-     * one includes images on other hosts and only runs when includeImages is on.
+     * Returns unique on-host image, stylesheet, and script URLs. Unlike
+     * getImages(), this supports broken-asset checks and excludes off-host URLs.
      *
      * @page jsoup document with a base URI or <base> tag.
      */
@@ -83,7 +76,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
         var assets = [];
         var seen   = {};
 
-        // Each pair is a jsoup selector and the attribute holding its URL.
+        // Map each HTML element to the attribute that contains its URL.
         var sources = [
             { "selector": "img[src]",                    "attribute": "src" },
             { "selector": "link[rel=stylesheet][href]",  "attribute": "href" },
@@ -93,9 +86,8 @@ component accessors=true hint="Parses HTML content to extract links and metadata
         for ( var source in sources ) {
             var elements = arguments.page.select( source.selector );
             for ( var element in elements ) {
-                // Check the raw value first: jsoup resolves an empty src to the
-                // page URL, and a data: value is inline content with nothing to
-                // request.
+                // Check raw values because jsoup resolves empty attributes to the
+                // page URL. data: values contain no file to request.
                 var raw = trim( element.attr( source.attribute ) );
                 if ( !len( raw ) || left( raw, 5 ) == "data:" ) {
                     continue;

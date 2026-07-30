@@ -6,12 +6,8 @@ component
     /**
      * generate
      *
-     * Turns a crawl result into the report saved as JSON beside the sitemap.
-     *
-     * Nothing here makes requests or touches the crawl. Crawler already collected
-     * every failure, redirect, and skip; this reshapes them into the lists a
-     * webmaster reads. Quoted struct keys keep their case through
-     * serializeJSON() on every supported engine.
+     * Builds a link report from data already collected by Crawler. This method
+     * does not make requests. Quoted keys preserve case during JSON serialization.
      *
      * @crawlResult Struct from Crawler.crawl().
      * @site Primary URL the crawl started from.
@@ -45,7 +41,7 @@ component
             "generatedAt"   : arguments.generatedAt,
             "site"          : arguments.site,
             "summary"       : {
-                // Pages the crawler claimed for a fetch, plus assets it checked.
+                // Count fetched pages and checked assets.
                 "checked"       : pageCount + assetCount,
                 "pagesChecked"  : pageCount,
                 "assetsChecked" : assetCount,
@@ -63,7 +59,7 @@ component
     /**
      * buildBroken
      *
-     * Returns one entry per URL that could not be fetched or checked, worst first.
+     * Returns failed pages and assets sorted by severity.
      *
      * @crawlResult Struct from Crawler.crawl().
      */
@@ -87,8 +83,7 @@ component
             } );
         }
 
-        // Server errors first, then missing pages, then everything else. A 500 is
-        // a site that is broken right now; a 404 is a link that needs fixing.
+        // List server errors first, then missing URLs, then other failures.
         out.sort( function( a, b ) {
             var rankDiff = severityRank( arguments.a.reason ) - severityRank( arguments.b.reason );
             return rankDiff != 0 ? rankDiff : compare( arguments.a.url, arguments.b.url );
@@ -99,8 +94,7 @@ component
     /**
      * severityRank
      *
-     * Returns the sort position for a failure reason. A lower number is more
-     * urgent and appears first in the report.
+     * Returns a failure reason's sort rank. Lower ranks appear first.
      *
      * @reason Failure category recorded by Crawler.
      */
@@ -120,8 +114,7 @@ component
     /**
      * buildRedirects
      *
-     * Returns one entry per URL that moved. permanent marks a 301 or 308, which
-     * is a move that will not change back, so those are the links worth updating.
+     * Returns redirects. permanent is true for status 301 or 308.
      *
      * @crawlResult Struct from Crawler.crawl().
      */
@@ -144,7 +137,7 @@ component
             } );
         }
 
-        // Permanent moves first, then by URL so the order is stable between runs.
+        // List permanent redirects first, then sort by source URL.
         out.sort( function( a, b ) {
             if ( arguments.a.permanent != arguments.b.permanent ) {
                 return arguments.a.permanent ? -1 : 1;
@@ -157,8 +150,7 @@ component
     /**
      * buildSkipped
      *
-     * Returns the URLs the crawler deliberately left out and why, so a webmaster
-     * can confirm each one was meant to be skipped.
+     * Returns skipped URLs and their reasons.
      *
      * @crawlResult Struct from Crawler.crawl().
      */
@@ -170,7 +162,7 @@ component
         for ( var ignored in arguments.crawlResult.ignored ) {
             out.append( { "url": ignored.url, "reason": ignored.reason } );
         }
-        // Group the reasons together, then sort by URL within each reason.
+        // Group by reason, then sort each group by URL.
         out.sort( function( a, b ) {
             var reasonDiff = compare( arguments.a.reason, arguments.b.reason );
             return reasonDiff != 0 ? reasonDiff : compare( arguments.a.url, arguments.b.url );

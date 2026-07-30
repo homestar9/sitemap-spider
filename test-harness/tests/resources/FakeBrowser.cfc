@@ -58,9 +58,8 @@ component {
     /**
      * failOn
      *
-     * Makes fetchUrl() throw for the given URL. Passing a status makes the throw
-     * carry errorCode and extendedInfo the way the real backends do, so specs can
-     * check that Crawler reads the status and the redirect steps.
+     * Makes fetchUrl() throw for a URL. A status adds the errorCode and
+     * extendedInfo fields that Crawler reads.
      *
      * @url The URL that should fail.
      * @message The error message to throw.
@@ -87,9 +86,7 @@ component {
     /**
      * addAsset
      *
-     * Registers the status checkUrl() reports for a file such as an image or a
-     * PDF. An unregistered URL is treated as a 404, which is what a spec means
-     * when it links to a file it never registered.
+     * Registers an asset status. Unregistered URLs return 404.
      *
      * @url The asset URL.
      * @status HTTP status to report.
@@ -139,8 +136,7 @@ component {
     /**
      * checkUrl
      *
-     * Records the check and reports the asset's status. Like the real backends
-     * this never throws, so the crawler always gets an answer.
+     * Records an asset check and returns its status without throwing.
      *
      * @url The asset URL to check.
      */
@@ -162,8 +158,7 @@ component {
     /**
      * getCheckedUrls
      *
-     * Returns the URLs checkUrl() was called with. A spec can count entries to
-     * confirm a file used by many pages was only requested once.
+     * Returns the URLs passed to checkUrl().
      */
     array function getCheckedUrls() {
         lock name="#variables.recordLock#" type="exclusive" timeout="10" {
@@ -173,9 +168,9 @@ component {
 
     /**
      * getRequestedUrls
-     * Returns the URLs fetchUrl() was called with. In a single-threaded (sync)
-     * crawl this is exact call order; under the parallel crawler the order across
-     * threads is not meaningful, so async specs assert on the set, not the order.
+     *
+     * Returns fetchUrl() calls in order for synchronous crawls. Parallel call
+     * order is not reliable, so async specs compare the URL set.
      */
     array function getRequestedUrls() {
         lock name="#variables.recordLock#" type="exclusive" timeout="10" {
@@ -185,9 +180,8 @@ component {
 
     /**
      * setParallelSupported
-     * Overrides what supportsParallel() reports, so a spec can exercise the
-     * Crawler's downgrade path (runAsync requested but the backend is not
-     * parallel-safe). Defaults to true, matching a normal fake.
+     *
+     * Sets the value returned by supportsParallel().
      *
      * @supported Whether supportsParallel() should return true.
      */
@@ -198,11 +192,8 @@ component {
 
     /**
      * supportsParallel
-     * Reports whether this fake is safe for the parallel crawler. Defaults to true
-     * (its only mutable state, requestedUrls, is lock-guarded); a spec can flip it
-     * with setParallelSupported() to test the Crawler's single-threaded downgrade.
-     * Mirrors the real backends' method so the Crawler can call it when deciding
-     * whether to run in parallel.
+     *
+     * Returns whether Crawler can call this fake from parallel workers.
      */
     boolean function supportsParallel() {
         return variables.parallelSupported;

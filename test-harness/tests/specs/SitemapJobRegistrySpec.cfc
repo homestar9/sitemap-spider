@@ -156,8 +156,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
             } );
 
             it( "drains a backlog larger than the pool: every queued job finishes", function(){
-                // Queue more jobs than maxConcurrentJobs so some start as queued and
-                // are promoted as slots free. All must reach completed.
+                // Queue more jobs than the pool can run at once.
                 var jobIds = [];
                 for ( var i = 1; i <= 5; i++ ) {
                     jobIds.append( queueSampleCrawl() );
@@ -202,10 +201,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
             } );
 
             it( "runs a job with the extension flags named on the job", function(){
-                // The module settings leave all three off. Turning videos on for
-                // this one job is what a portal does for a site whose sitemap
-                // should carry them, without touching global config. index.cfm
-                // carries a <video> tag, so the finished file has a video block.
+                // Enable videos for this job without changing module settings.
                 var jobId = variables.registry.queue(
                     url           = variables.appRoot,
                     filePath      = tempFile(),
@@ -287,9 +283,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
             } );
 
             it( "falls back to the module setting for a record queued before the flags existed", function(){
-                // A record a persistent store was already holding when the host
-                // upgraded has no include* keys, so runJob reads them through
-                // recordFlag rather than straight off the record.
+                // Simulate a persistent record that lacks newer option keys.
                 var registry = prepareMock( getInstance( "SitemapJobRegistry@sitemap-spider" ) );
                 makePublic( registry, "recordFlag" );
                 makePublic( registry, "recordPath" );
@@ -313,9 +307,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
             } );
 
             it( "tells the host app when a job finishes", function(){
-                // The events are how a host uploads the finished file or emails
-                // someone, without this module knowing about any of that. Listen the
-                // way a host would and check the job's events arrive.
+                // Record the lifecycle events announced for this job.
                 var seen = [];
                 var interceptors = getInstance( "coldbox:interceptorService" );
                 interceptors.listen(

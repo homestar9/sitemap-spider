@@ -211,7 +211,7 @@ component
 			"progress"       : {},
 			"result"         : {},
 			"error"          : "",
-			// This key is currently always empty.
+			// Crawls do not save checkpoints.
 			"checkpoint"     : ""
 		};
 		variables.store.save( jobId, record );
@@ -267,7 +267,7 @@ component
 				publicBaseUrl   = record.publicBaseUrl,
 				runAsync        = record.runAsync,
 				browserDsl      = record.browserDsl,
-				// Older durable records may not contain newer option keys.
+				// Fall back to settings when durable records lack these keys.
 				includeImages   = recordFlag( record, "includeImages" ),
 				includeHreflang = recordFlag( record, "includeHreflang" ),
 				includeVideos   = recordFlag( record, "includeVideos" ),
@@ -319,7 +319,7 @@ component
 	/**
 	 * recordFlag
 	 *
-	 * Returns a saved boolean option or its module default for an older record.
+	 * Returns a saved boolean or the module default when the key is missing.
 	 *
 	 * @record The job record.
 	 * @key    One of includeImages, includeHreflang, includeVideos,
@@ -334,8 +334,8 @@ component
 	/**
 	 * recordPath
 	 *
-	 * Returns a saved output path or the module default for an older record.
-	 * An existing empty value still means "derive from filePath."
+	 * Returns a saved path or the module default when the key is missing.
+	 * A saved empty value still derives the path from filePath.
 	 *
 	 * @record The persisted job record.
 	 * @key    Either metadataPath or linkReportPath.

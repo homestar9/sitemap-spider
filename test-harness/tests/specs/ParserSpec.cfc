@@ -1,7 +1,5 @@
 /**
- * Tests Parser link extraction, URL normalization, canonical URLs, robots
- * directives, sitemap extensions, and last-modified dates. TestBox exposes the
- * private isNoFollow() helper for direct examples.
+ * Tests Parser links, metadata, robots directives, and sitemap extensions.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
@@ -31,18 +29,15 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		super.afterAll();
 	}
 
-	// Parses html with an explicit base URI so jsoup's abs:href resolves relative
-	// hrefs. parser.parseHtml() sets no base URI, so it cannot be used here.
 	/**
 	 * parseWithBase
 	 *
-	 * Parses HTML with the shared base URL.
+	 * Parses HTML with a base URI so jsoup resolves relative links.
 	 */
 	private any function parseWithBase( required string html, required string baseUri ){
 		return variables.jsoup.parse( arguments.html, arguments.baseUri );
 	}
 
-	// Parses an anchor tag and returns its jsoup element, for isNoFollow() tests.
 	/**
 	 * anchor
 	 *
@@ -335,8 +330,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "does not report off-host or image links as ignored", function(){
-					// Off-host and image links are dropped silently, not reported,
-					// so a page with only those has an empty ignored list.
+					// Dropped off-host and image links do not enter ignored.
 					var page = parseWithBase(
 						'<a href="http://example.test/pic.jpg">image</a>'
 						& '<a href="http://other.test/x.cfm">other host</a>',
@@ -373,8 +367,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "keeps an on-host file link in assets so its status can be checked", function(){
-					// A .jpg link matches notAllowedPattern, so it is never crawled as
-					// a page. It still goes into assets because it can be a dead link.
+					// notAllowedPattern blocks .jpg pages but keeps them as assets.
 					var page = parseWithBase(
 						'<a href="http://example.test/pic.jpg">image</a>',
 						"http://example.test/"
@@ -523,8 +516,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "keeps off-host alternates verbatim", function(){
-					// hreflang points at other-language versions, which usually live
-					// on other hosts, so alternates are never host-filtered.
+					// hreflang alternates can use another host.
 					var page = parseWithBase(
 						'<link rel="alternate" hreflang="de" href="https://example.de/seite.cfm?a=1&b=2">',
 						"http://example.test/"
@@ -698,8 +690,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "returns a video declared via both og:video and a video tag only once", function(){
-					// Both sources point at the same file, so only the OG entry
-					// (collected first) survives the URL dedupe.
+					// The Open Graph entry is collected first and wins the duplicate.
 					var page = parseWithBase(
 						'<html><head><title>T</title>'
 						& '<meta name="description" content="D">'
@@ -947,9 +938,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "dedupes an og:video against a JSON-LD embedUrl even when the content URLs differ", function(){
-					// The JSON-LD entry holds a media file and a player page.
-					// Deduping on both of its URLs is what stops the OG tag,
-					// which names only the player page, emitting a second time.
+					// The shared player URL removes the duplicate Open Graph entry.
 					var page = parseWithBase(
 						'<html><head><title>T</title>'
 						& '<meta name="description" content="D">'

@@ -36,14 +36,9 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.redirects = {};
         // Maps each skipped URL to its first skip reason.
         variables.ignoredUrls = {};
-        // The four maps below use the same Java containers and the same helper
-        // code in both crawl modes. initAsyncState() swaps in concurrent versions
-        // that answer the same method calls, so nothing that reads or writes them
-        // needs to know which mode is running.
-        //
-        // Maps each discovered URL to the pages that link to it. Entries are
-        // dropped once a URL is fetched successfully, so this holds referrers for
-        // the frontier and the failures only, not for the whole site.
+        // These Java maps have concurrent replacements in initAsyncState().
+        // Keep the same map methods in both crawl modes.
+        // Store referrers only until a URL succeeds or remains failed.
         variables.inboundLinks = createObject( "java", "java.util.LinkedHashMap" ).init();
         // Marks URLs that hit maxInboundLinks so the report can say so.
         variables.inboundTruncated = createObject( "java", "java.util.LinkedHashMap" ).init();
@@ -198,8 +193,7 @@ component accessors=true hint="Handles crawling of website URLs" {
                     runQueueItem();
                 }
             }
-            // Check collected assets once every page has been seen, so each unique
-            // file is requested only once.
+        // Check each collected asset once after the page crawl.
             checkAssets();
         } finally {
             browser.shutdown();
@@ -384,9 +378,8 @@ component accessors=true hint="Handles crawling of website URLs" {
         if ( fetchResult.keyExists( "redirectChain" ) ) {
             appendRedirect( normalizedUrl, fetchResult.redirectChain );
         } else {
-            // Fetched fine and did not move, so nothing here needs reporting and
-            // the pages linking to it can be forgotten. A redirect keeps its
-            // referrers: those are the pages whose links should be updated.
+            // Drop referrers for a successful URL. Redirects keep them so the
+            // report can name pages whose links should change.
             removeInboundLinks( normalizedUrl );
         }
 
@@ -418,13 +411,11 @@ component accessors=true hint="Handles crawling of website URLs" {
             for ( var ignoredLink in linkResult.ignored ) {
                 appendIgnoredUrl( ignoredLink.url, ignoredLink.reason );
             }
-            // Remember this page as the source of every link it contains, so a
-            // broken one can name the page that needs fixing.
+            // Record the page that contains each link.
             for ( var foundLink in links ) {
                 recordInboundLink( foundLink, fetchedUrl );
             }
-            // Collect on-host files that are linked or embedded but never crawled
-            // as pages. checkAssets() requests each unique one after the crawl.
+            // Collect on-host assets for the later checkAssets() phase.
             if ( settings.checkAssets ) {
                 collectAssets( linkResult.assets, fetchedUrl );
                 collectAssets( parser.getAssetLinks( parsedPage ), fetchedUrl );
@@ -687,8 +678,7 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * appendBadUrl
      *
-     * Records a URL that could not be fetched. foundOn stays empty here and is
-     * filled from inboundLinks once, in buildCrawlResult().
+     * Records a failed page or asset. buildCrawlResult() adds its referrers.
      *
      * @url URL that failed.
      * @message Fetch error message.
@@ -725,14 +715,10 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * classifyFetchError
      *
-     * Turns a fetch exception into a status code, a short reason, and the redirect
-     * steps that led to it.
+     * Returns the status, reason, and redirect steps from a fetch exception.
      *
-     * A browser backend reports the status in errorCode and the steps in
-     * extendedInfo as JSON. Both are optional: a custom IBrowser that does not set
-     * them still crawls fine, it just reports status 0 and reason "unknown".
-     * Transport failures never have a status, so their reason comes from the
-     * exception type instead.
+     * Custom browsers can omit errorCode and extendedInfo. The crawler then uses
+     * status 0 and reads the transport failure from the exception type.
      *
      * @e The caught exception.
      */
@@ -745,7 +731,7 @@ component accessors=true hint="Handles crawling of website URLs" {
             status = int( arguments.e.errorCode );
         }
 
-        // extendedInfo carries the status and redirect steps as JSON.
+        // Read the status and redirect steps from extendedInfo JSON.
         if ( arguments.e.keyExists( "extendedInfo" ) && isJSON( arguments.e.extendedInfo ) ) {
             var info = deserializeJSON( arguments.e.extendedInfo );
             if ( isStruct( info ) ) {
@@ -764,9 +750,8 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * statusReason
      *
-     * Returns the short category for an HTTP status, or an empty string when the
-     * status cannot explain the failure on its own. Both failed page fetches and
-     * failed asset checks use this so they report the same words.
+     * Returns the shared failure category for an HTTP status.
+     * Returns an empty string when the status does not explain the failure.
      *
      * @status HTTP status, or 0 when the request never got a response.
      */
@@ -791,9 +776,7 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * failureReason
      *
-     * Returns the short category for a failed fetch. An HTTP status decides the
-     * reason when there is one. Otherwise the exception type names the transport
-     * problem, which is the only clue a connection failure leaves behind.
+     * Returns the failure category from the HTTP status or exception type.
      *
      * @e The caught exception.
      * @status HTTP status, or 0 when the request never got a response.
@@ -861,19 +844,13 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * recordInboundLink
      *
-     * Records that one page links to a URL, so a broken link can name the pages
-     * that need fixing.
+     * Records the page that contains a URL.
      *
-     * Referrers are only worth keeping for URLs that might turn out to be broken,
-     * so this skips a URL that already fetched successfully and
-     * removeInboundLinks() drops the rest as they succeed. Memory therefore tracks
-     * the frontier plus the failures instead of every link on the site.
+     * Successful URLs lose their referrers, so memory holds only queued and
+     * failed URLs.
      *
-     * The referrer lists are always CopyOnWriteArrayList, even in a single-threaded
-     * crawl, so this method has one body instead of one per crawl mode. Copying a
-     * list of at most maxInboundLinks entries costs nothing, and a Java list cannot
-     * be silently duplicated the way Adobe duplicates a CFML array read out of a
-     * struct.
+     * Always use CopyOnWriteArrayList. Adobe ColdFusion can copy a CFML array
+     * read from a struct, which would lose appended referrers.
      *
      * @target URL that was linked to.
      * @source Page the link was found on.
@@ -886,8 +863,7 @@ component accessors=true hint="Handles crawling of website URLs" {
         if ( arguments.target == arguments.source || !len( arguments.target ) ) {
             return;
         }
-        // Already fetched, working, and not moved, so there is nothing left to
-        // report about it and its referrers were already dropped.
+        // Skip a successful URL whose referrers were already removed.
         if (
             isUrlProcessed( arguments.target ) &&
             !isBadUrl( arguments.target ) &&
@@ -908,9 +884,8 @@ component accessors=true hint="Handles crawling of website URLs" {
         if ( list.contains( arguments.source ) ) {
             return;
         }
-        // size() and add() are not one atomic step, so a burst of parallel workers
-        // can store one or two past the cap. The cap exists to bound memory, so
-        // being off by one does not matter.
+        // size() and add() are not atomic. Parallel workers can exceed the memory
+        // cap by a small number of entries.
         if ( list.size() >= settings.maxInboundLinks ) {
             variables.inboundTruncated.put( arguments.target, true );
             return;
@@ -921,8 +896,7 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * removeInboundLinks
      *
-     * Drops the referrers for a URL that fetched successfully. This is what keeps
-     * inboundLinks small on a large site.
+     * Deletes referrers after a URL succeeds.
      *
      * @url URL that no longer needs referrers.
      */
@@ -1013,9 +987,7 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.badUrls       = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.ignoredUrls   = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.redirects     = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
-        // These four already hold Java maps. Swapping in the concurrent versions
-        // keeps every caller's method calls identical, so the helpers that read
-        // and write them need no parallel-mode branch.
+        // Replace the four report maps without changing their method calls.
         variables.inboundLinks     = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.inboundTruncated = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.assetUrls        = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
@@ -1114,11 +1086,8 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * collectAssets
      *
-     * Adds on-host files to the set that checkAssets() requests later, and records
-     * the page each one was found on.
-     *
-     * Collecting now and checking afterwards means a file used by every page, such
-     * as a logo, is requested once instead of once per page.
+     * Collects unique on-host assets and records the page containing each one.
+     * checkAssets() requests them after the page crawl.
      *
      * @urls Absolute on-host asset URLs found on a page.
      * @sourceUrl Page the assets were found on.
@@ -1142,9 +1111,8 @@ component accessors=true hint="Handles crawling of website URLs" {
      *
      * Requests the status of every collected asset after the page crawl finishes.
      *
-     * Assets never become pages: they are not parsed, not queued, not counted
-     * toward maxPages, and never reach the sitemap XML. A failed one is recorded
-     * in badUrls with kind "asset".
+     * Assets are not parsed, queued, counted toward maxPages, or added to the
+     * sitemap. Failed assets enter badUrls with kind "asset".
      */
     private void function checkAssets() {
         if ( !settings.checkAssets || variables.progress.isCanceled() ) {
@@ -1174,9 +1142,8 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * checkAsset
      *
-     * Requests one asset's status and records the outcome. checkUrl() should not
-     * throw, but a custom browser backend might, so a failure here is recorded
-     * rather than allowed to stop the phase.
+     * Checks one asset and records its result. A custom checkUrl() can throw, so
+     * this method records the error without stopping the remaining checks.
      *
      * @url Asset URL to check.
      */
@@ -1196,8 +1163,7 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * recordAssetResult
      *
-     * Stores an asset check outcome. A working asset drops its referrers because
-     * there is nothing left to report about it.
+     * Stores an asset result and removes referrers when the asset works.
      *
      * @url Asset URL that was checked.
      * @result Struct from IBrowser.checkUrl().
@@ -1216,8 +1182,7 @@ component accessors=true hint="Handles crawling of website URLs" {
         var errorText = arguments.result.keyExists( "error" ) && len( arguments.result.error )
             ? arguments.result.error
             : "Asset request returned status code #status#";
-        // A status explains the failure when there is one. Otherwise the request
-        // never got a response, which is a connection problem.
+        // A missing status means the request never received a response.
         var reason = statusReason( status );
         recordAssetFailure(
             arguments.url,
@@ -1231,8 +1196,7 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * recordAssetFailure
      *
-     * Records a broken asset in badUrls alongside broken pages, tagged kind
-     * "asset" so a report can list them separately.
+     * Adds a broken asset to badUrls with kind "asset".
      *
      * @url Asset URL that failed.
      * @message Failure text.
@@ -1254,8 +1218,8 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * runAsyncAssetChecks
      *
-     * Runs the asset checks across worker threads. The queue is filled before any
-     * worker starts, so an empty poll means the work is finished.
+     * Checks assets on worker threads. The full queue exists before workers
+     * start, so an empty poll means no work remains.
      *
      * @urls Asset URLs to check.
      */
@@ -1324,12 +1288,10 @@ component accessors=true hint="Handles crawling of website URLs" {
                 "runAsync": false
             };
 
-        // assetResults is a Java map in both modes, so this count is the same
-        // either way.
+        // assetResults uses a Java map in both crawl modes.
         result[ "assetsChecked" ] = variables.assetResults.size();
 
-        // Fill referrers once, at the end, instead of on every failure during the
-        // crawl. Only failures need them, and only now is the list complete.
+        // Add complete referrer lists only after the crawl finishes.
         for ( var badUrl in result.badUrls ) {
             var inbound = inboundFor( badUrl );
             result.badUrls[ badUrl ][ "foundOn" ]          = inbound.foundOn;
@@ -1370,8 +1332,7 @@ component accessors=true hint="Handles crawling of website URLs" {
      */
     private struct function redirectPair( required string requestedUrl, required array chain ) {
         var finalUrl = arguments.chain.len() ? arguments.chain[ arguments.chain.len() ].url : arguments.requestedUrl;
-        // The first hop's status says whether the move is permanent, which decides
-        // whether a webmaster should update the links pointing at it.
+        // The first status determines whether the original URL moved permanently.
         var firstStatus = arguments.chain.len() ? arguments.chain[ 1 ].status : 0;
         var inbound     = inboundFor( arguments.requestedUrl );
         return {

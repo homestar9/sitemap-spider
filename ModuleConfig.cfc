@@ -88,24 +88,19 @@ component {
             metadataPath : "",
             // Adds the full badUrls and ignored lists to the metadata file.
             metadataIncludeUrls : false,
-            // Saves a JSON report of broken links, redirects, and skipped URLs.
-            // The crawl already collects this, so it costs no extra requests
-            // unless checkAssets is also on.
+            // Saves broken links, redirects, and skipped URLs as JSON.
+            // Only checkAssets adds requests.
             writeLinkReport : false,
-            // Full link report path. Empty saves it beside the sitemap as
-            // .links.json. Use a path outside the web root to keep it private.
+            // Empty saves a .links.json report beside the sitemap.
+            // Use a private path when the report must not be public.
             linkReportPath : "",
-            // Records which pages link to each URL, so a broken link can name the
-            // pages that need fixing. Entries are dropped as URLs are fetched
-            // successfully, so this tracks the queue and the failures, not the
-            // whole site.
+            // Records pages that contain each broken link. Successful URLs are
+            // removed, so memory holds only queued and failed URLs.
             trackInboundLinks : true,
             // Linking pages kept per URL before the report marks the list capped.
             maxInboundLinks : 10,
-            // Requests the status of on-host images, stylesheets, scripts, and
-            // linked files such as PDFs. These are never crawled as pages and
-            // never reach the sitemap. This is the only part of the report that
-            // makes extra HTTP requests, so it is off by default.
+            // Checks on-host assets without adding them to the sitemap.
+            // Each asset adds an HTTP request, so this is off by default.
             checkAssets : false,
             // Limits how many unique asset URLs one crawl checks.
             maxAssetChecks : 5000,

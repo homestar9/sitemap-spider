@@ -2,19 +2,18 @@
  * Renders pages with Playwright so the crawler can see JavaScript content and
  * client-side redirects.
  *
- * This component uses cbPlaywright's launchBrowser() and navigate() helpers but
- * not its lifecycle methods. Those methods can rethrow a missing-super-method
- * error on BoxLang. initPlaywright() and shutdown() perform that work here.
+ * Uses cbPlaywright's launchBrowser() and navigate() helpers. Its lifecycle
+ * methods fail on BoxLang when a super method is missing, so this component
+ * initializes and closes Playwright itself.
  *
- * One Playwright instance, browser, context, and page are created on the first
- * fetch and reused for the crawl. Only their creating thread can use or close
- * them. The crawler therefore runs this backend on one thread and calls
- * shutdown() from that thread. Each concurrent crawl starts its own Node and
- * Chromium processes, so maxConcurrentJobs should remain low.
+ * The first fetch creates resources that the crawl reuses. Only their creating
+ * thread can use or close them, so Crawler runs this backend on one thread and
+ * calls shutdown() there. Each crawl starts Node and Chromium processes, so
+ * maxConcurrentJobs should remain low.
  *
- * A hard process kill can leave Chromium processes behind because no cleanup
- * code runs. During a ColdBox reinit, SitemapJobRegistry cancels the crawl and
- * its owning thread reaches shutdown().
+ * A hard process kill can leave Chromium running because cleanup does not run.
+ * During ColdBox reinit, SitemapJobRegistry cancels each crawl so its thread can
+ * call shutdown().
  */
 component
     extends="BaseBrowser"
@@ -49,8 +48,7 @@ component
             headers = toHeaderStruct( response.allHeaders() );
         }
 
-        // Build the chain before the status check so a failed response still
-        // reports the redirect steps that led to it.
+        // Build the chain first so a failed response keeps its redirect steps.
         var chain = buildRedirectChain( response );
 
         if ( statusCode != 200 ) {

@@ -76,9 +76,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	/**
 	 * crawlBrokenAssets
 	 *
-	 * Crawls the broken-assets fixture with asset checking turned on and returns
-	 * the result. checkAssets is restored afterwards so the other specs still see
-	 * the module default.
+	 * Crawls the broken-assets fixture with asset checks enabled. Restores
+	 * checkAssets before returning.
 	 */
 	private struct function crawlBrokenAssets(){
 		var settings = getInstance( "coldbox:moduleSettings:sitemap-spider" );
@@ -210,8 +209,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		describe( "asset checking against the sample site", function(){
 
-			// broken-assets.cfm is not linked from any reachable page, so seeding it
-			// directly leaves the shared baseline crawl in beforeAll untouched.
+			// Crawl the unlinked fixture without changing the shared result.
 
 			it( "reports a missing image, stylesheet, and script as broken assets", function(){
 				var result = crawlBrokenAssets();
@@ -287,9 +285,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		describe( "redirect handling", function(){
 
-			// The redirect fixtures are not linked from any reachable page, so each
-			// spec seeds the interstitial URL directly. This also leaves the shared
-			// baseline crawl in beforeAll untouched.
+			// Start each crawl at its unlinked redirect fixture.
 
 			it( "follows a meta-refresh and records the target, not the interstitial", function(){
 				var oldUrl = variables.appRoot & "redirect-old.cfm";
@@ -354,18 +350,14 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				expect( hasPage( second.pages, variables.appRoot & "redirect-new.cfm" ) ).toBeFalse();
 			} );
 
-			// The JavaScript-redirect case (js-redirect-old.cfm does a
-			// location.replace to contact.cfm) is not testable under the default jsoup
-			// backend, which cannot run JavaScript. Its live assertion runs in
-			// PlaywrightSpec, which uses the Playwright backend.
+			// Jsoup cannot run the fixture's location.replace(). PlaywrightSpec
+			// tests that redirect with the Playwright backend.
 
 		} );
 
 		describe( "noindex handling", function(){
 
-			// The noindex fixtures are not linked from any reachable page, so each
-			// spec starts the crawl at the fixture directly. This leaves the shared
-			// baseline crawl in beforeAll untouched.
+			// Start each crawl at its unlinked noindex fixture.
 
 			it( "excludes a meta-noindex page but still follows its links", function(){
 				var noindexUrl = variables.appRoot & "noindex.cfm";
@@ -373,9 +365,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				var result = getInstance( "sitemapService@sitemap-spider" ).create( noindexUrl );
 
-				// The page itself stays off the sitemap and is reported in ignored,
-				// but its child link (linked from nowhere else) was still crawled —
-				// noindex is not nofollow.
+				// noindex skips the page but does not block its child link.
 				expect( hasPage( result.pages, noindexUrl ) ).toBeFalse();
 				expect( hasPage( result.pages, childUrl ) ).toBeTrue();
 
@@ -454,10 +444,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		describe( "sitemap index splitting via create()", function(){
 
 			it( "splits into an index and child files when the crawl exceeds maxUrlsPerSitemap", function(){
-				// Temporarily lower the per-file URL limit so the sample crawl
-				// (4 valid pages) splits into more than one file. The setting is
-				// the shared module-settings struct the service injects, so it is
-				// restored in the finally to avoid leaking into other specs.
+				// Lower the shared limit to split the sitemap, then restore it.
 				var settings   = getInstance( "coldbox:moduleSettings:sitemap-spider" );
 				var originalMax = settings.maxUrlsPerSitemap;
 				variables.splitOutDir = getTempDirectory() & "sitemap-split-" & getTickCount() & "/";
@@ -510,8 +497,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 			it( "leaves images out when the crawl passes includeImages false", function(){
-				// The module setting is off by default, so this also proves the
-				// default: no argument, no images.
+				// Omitting includeImages uses the disabled module setting.
 				var result = getInstance( "sitemapService@sitemap-spider" )
 					.create( url = variables.appRoot, includeImages = false );
 
@@ -524,9 +510,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		describe( "hreflang and video sitemap extensions via create()", function(){
 
 			it( "records alternates and emits <xhtml:link> when includeHreflang is on", function(){
-				// index.cfm declares an "es" alternate on another host and an
-				// "x-default" pointing at itself. Both land on the page struct and
-				// in the XML, emitted exactly as declared.
+				// Keep both the off-host "es" and local "x-default" alternates.
 				var result = getInstance( "sitemapService@sitemap-spider" )
 					.create( url = variables.appRoot, includeHreflang = true );
 
@@ -544,9 +528,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 			it( "records videos and emits <video:video> when includeVideos is on", function(){
-				// index.cfm carries a <video src="./assets/video/sample.mp4"
-				// poster="./assets/img/sample.jpg">. The title comes from the page
-				// <title> and the description from the meta description tag.
+				// The HTML video uses the page title and meta description.
 				var result = getInstance( "sitemapService@sitemap-spider" )
 					.create( url = variables.appRoot, includeVideos = true );
 
@@ -570,11 +552,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 			it( "reads a video from a JSON-LD block, duration included", function(){
-				// video-jsonld.cfm describes its video only in a JSON-LD
-				// VideoObject inside a @graph array, with no Open Graph tags and
-				// no <video> element. Nothing links to that page, so it is
-				// reached through seedUrls. Its own name and description win
-				// over the page <title>, and PT1M33S becomes 93 seconds.
+				// Seed the unlinked JSON-LD VideoObject. Its fields override page
+				// values, and PT1M33S becomes 93 seconds.
 				var pageUrl = variables.appRoot & "video-jsonld.cfm";
 				var result  = getInstance( "sitemapService@sitemap-spider" ).create(
 					url           = variables.appRoot,
@@ -602,12 +581,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		describe( "async parallel crawl", function(){
 
-			// The shared beforeAll crawl (variables.result) is synchronous. Crawl
-			// the same sample site in parallel and assert it discovers the exact
-			// same pages and bad URLs. Assertions are on the sorted sets, not visit
-			// order, because parallel order is not deterministic. The test harness
-			// sets maxCrawlDelay = 0, so the sample robots.txt Crawl-delay does not
-			// force the crawl back to sync.
+			// Compare sorted results because parallel visit order is not deterministic.
 			it( "finds the same pages as the synchronous crawl", function(){
 				var async = getInstance( "sitemapService@sitemap-spider" )
 					.create( url = variables.appRoot, runAsync = true );

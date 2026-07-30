@@ -1,7 +1,5 @@
 /**
- * Tests the link report sidecar end to end: writing it beside the sitemap, using
- * a custom path, reading it back with readLinkReport(), and the counts it adds to
- * stats. These specs crawl the real sample site.
+ * Tests writing and reading link reports while crawling the sample site.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
@@ -48,6 +46,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		super.afterAll();
 	}
 
+	/**
+	 * run
+	 *
+	 * Defines the LinkReportSpec examples.
+	 */
 	function run(){
 
 		describe( "link report sidecar", function(){
@@ -110,8 +113,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 			it( "does not change the sitemap XML it was generated alongside", function(){
-				// The report must be a byproduct, never something that alters what
-				// gets indexed.
+				// Creating the report must not change the sitemap.
 				expect( variables.reportResult.sitemap ).toBe( variables.plainResult.sitemap );
 			} );
 
@@ -146,7 +148,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 					expect( result.filePath ).toBe( filePath & ".gz" );
 					expect( result.linkReportPath ).toBe( filePath & ".links.json" );
-					// The report itself is never gzipped, so it reads as plain JSON.
+					// The report stays plain JSON when the sitemap uses gzip.
 					expect( isJSON( fileRead( result.linkReportPath ) ) ).toBeTrue();
 				} finally {
 					settings.gzipOutput = saved;
@@ -199,8 +201,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			it( "returns exists=false when the file is not valid JSON", function(){
 				var brokenPath = variables.tempDir & "broken/report.links.json";
-				// Adobe's directoryCreate() takes only the path, so guard the call
-				// rather than passing ignoreExists.
+				// Adobe CFML does not support directoryCreate()'s ignoreExists argument.
 				var brokenDir = getDirectoryFromPath( brokenPath );
 				if ( !directoryExists( brokenDir ) ) {
 					directoryCreate( brokenDir );
@@ -218,7 +219,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				var stats = variables.reportResult.stats;
 
 				expect( stats ).toHaveKey( "badUrlCount,ignoredCount,redirectCount,assetsCheckedCount,assetsBrokenCount" );
-				// Asset checking is off by default, so nothing was checked.
+				// Asset checking is disabled by default.
 				expect( stats.assetsCheckedCount ).toBe( 0 );
 				expect( stats.assetsBrokenCount ).toBe( 0 );
 			} );

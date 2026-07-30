@@ -35,11 +35,8 @@ component {
     /**
      * checkUrl
      *
-     * Asks the Jsoup backend for a URL's status. Reading a status code needs no
-     * JavaScript, so a rendering backend such as Playwright inherits this instead
-     * of driving a real browser to check an image.
-     *
-     * Jsoup overrides this with its own request.
+     * Uses Jsoup to check a URL without starting the rendering backend.
+     * Playwright inherits this because asset checks do not need JavaScript.
      *
      * @url URL to check.
      */

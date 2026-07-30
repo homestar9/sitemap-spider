@@ -79,14 +79,12 @@ component
         param name="arguments.includeHreflang" default="#settings.includeHreflang#";
         param name="arguments.includeVideos" default="#settings.includeVideos#";
 
-        // param preserves an explicit empty metadataPath so it can mean
-        // "save beside the sitemap."
+        // Keep an explicit empty path so metadata is saved beside the sitemap.
         param name="arguments.writeMetadata" default="#settings.writeMetadata#";
         param name="arguments.metadataPath" default="#settings.metadataPath#";
         param name="arguments.metadataIncludeUrls" default="#settings.metadataIncludeUrls#";
 
-        // param preserves an explicit empty linkReportPath the same way, so it can
-        // mean "save beside the sitemap."
+        // Keep an explicit empty path so the report is saved beside the sitemap.
         param name="arguments.writeLinkReport" default="#settings.writeLinkReport#";
         param name="arguments.linkReportPath" default="#settings.linkReportPath#";
 
@@ -225,12 +223,12 @@ component
             var linkReport = linkReportGenerator.generate(
                 crawlResult   = result,
                 site          = urlArray[ 1 ],
-                // A development build may not have a stamped version.
+                // Development builds can have no stamped version.
                 moduleVersion = moduleConfig.keyExists( "version" ) ? moduleConfig.version : "",
                 generatedAt   = stats.generatedAt
             );
             try {
-                // The report is always plain JSON, even when the sitemap is gzipped.
+                // Keep the report as plain JSON when the sitemap uses gzip.
                 generator.saveToFile( serializeJSON( linkReport ), linkReportTarget, false );
                 linkReportSaved = true;
             } catch ( any e ) {
@@ -299,9 +297,8 @@ component
     /**
      * readLinkReport
      *
-     * Reads a saved link report and adds exists=true to the returned struct.
-     * A sitemap path resolves through the linkReportPath setting or its derived
-     * sidecar name. Missing or invalid JSON returns { "exists": false }.
+     * Reads a link report and adds exists=true. A sitemap path uses the configured
+     * or derived report path. Missing or invalid JSON returns { "exists": false }.
      */
     struct function readLinkReport( required string path ) {
         // Treat any path without .links.json as a sitemap path.
@@ -457,8 +454,7 @@ component
     /**
      * sidecarPath
      *
-     * Builds a sidecar file path beside a sitemap. The .gz suffix is removed first
-     * so a compressed sitemap does not produce a name like sitemap.xml.gz.meta.json.
+     * Builds a sidecar path. Removes .gz first so the suffix follows .xml.
      *
      * @sitemapPath Path of the sitemap the sidecar belongs to.
      * @suffix Suffix for the sidecar, including its leading dot.

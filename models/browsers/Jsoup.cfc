@@ -4,8 +4,7 @@ component
 {
 
     property name="jSoup" inject="javaloader:org.jsoup.Jsoup";
-    // jsoup's HTTP method enum. cbjavaloader owns the jar's classes, so this must
-    // be injected rather than built with createObject( "java", ... ).
+    // Inject this enum through cbjavaloader. createObject("java") cannot load it.
     property name="jSoupMethod" inject="javaloader:org.jsoup.Connection$Method";
     property name="logger" inject="logbox:logger:{this}";
 
@@ -115,16 +114,9 @@ component
     /**
      * checkUrl
      *
-     * Requests only the status of a URL, for files the crawler never fetches as
-     * pages such as images, stylesheets, and PDFs.
-     *
-     * A HEAD request avoids downloading the file. Plenty of servers reject HEAD,
-     * so a 405 or 501 retries with a GET capped at one byte, which still reads the
-     * status without pulling the body.
-     *
-     * This never throws. A connection failure returns ok=false with status 0 and
-     * the reason in error, because the crawler checks many URLs in a row and needs
-     * an answer for each one.
+     * Checks one URL without downloading its body. Uses HEAD, then GET limited to
+     * one byte for status 405 or 501. This method must not throw. Connection
+     * failures return ok=false, status=0, and the message in error.
      *
      * @url URL to check.
      */
@@ -161,9 +153,8 @@ component
     /**
      * requestStatus
      *
-     * Makes one request for checkUrl() and returns the jsoup response. Redirects
-     * are followed here so a moved file is not reported as broken. maxBodySize is
-     * 1 byte because only the status matters.
+     * Sends one checkUrl() request and follows redirects. Limits the body to one
+     * byte because only the status is needed.
      *
      * @url URL to request.
      * @method HTTP method, either HEAD or GET.
