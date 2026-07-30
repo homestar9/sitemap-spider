@@ -1,31 +1,41 @@
 /**
- * Unit specs for CrawlProgress.cfc.
- *
- * CrawlProgress is a pure counter object (no HTTP, no crawl): the Crawler updates
- * it during a crawl and a caller reads snapshot()/isCanceled(). These specs drive
- * it directly, so no server or fixture is needed beyond WireBox resolving the
- * transient component.
- *
- * Local run recipe:
- *   1. box server start serverConfigFile=server-adobe@2023.json
- *   2. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.CrawlProgressSpec"
+ * Tests thread-safe crawl counters, elapsed time, snapshots, and cancellation.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
+	/**
+	 * beforeAll
+	 *
+	 * Loads the shared dependencies and fixtures for these specs.
+	 */
 	function beforeAll(){
 		super.beforeAll();
 		setup();
 	}
 
+	/**
+	 * afterAll
+	 *
+	 * Restores shared state changed by these specs.
+	 */
 	function afterAll(){
 		super.afterAll();
 	}
 
-	// A fresh CrawlProgress. It is transient, so getInstance returns a new one.
+	/**
+	 * newProgress
+	 *
+	 * Returns a new CrawlProgress for one example.
+	 */
 	private any function newProgress(){
 		return getInstance( "CrawlProgress@sitemap-spider" );
 	}
 
+	/**
+	 * run
+	 *
+	 * Defines the CrawlProgressSpec examples.
+	 */
 	function run(){
 		describe( "CrawlProgress", function(){
 			it( "starts at zero with a queued status and no cancel", function(){

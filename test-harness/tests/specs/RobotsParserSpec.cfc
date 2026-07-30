@@ -1,41 +1,46 @@
 /**
- * Unit specs for RobotsParser.cfc.
- *
- * RobotsParser is pure (no HTTP): parse() reads robots.txt text, and
- * isPathAllowed()/getCrawlDelay() answer questions about the active user-agent
- * group. Every spec news up a fresh RobotsParser and feeds it literal robots.txt
- * content, so no server or fixture file is needed.
- *
- * Covers the task 07 behavior: Disallow/Allow prefix + "*"/"$" wildcards with
- * longest-match precedence (tie -> Allow), user-agent group selection, and
- * Crawl-delay parsing.
- *
- * Task 17 adds RFC 9309 user-agent selection (product-token equality, not a
- * substring of the whole user agent) and query-string matching in isPathAllowed.
- *
- * Local run recipe:
- *   1. box server start serverConfigFile=server-adobe@2023.json
- *   2. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.RobotsParserSpec"
+ * Tests robots.txt rules, wildcards, longest-match precedence, user-agent
+ * selection, query strings, and Crawl-delay without making HTTP requests.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
+	/**
+	 * beforeAll
+	 *
+	 * Loads the shared dependencies and fixtures for these specs.
+	 */
 	function beforeAll(){
 		super.beforeAll();
 		setup();
 	}
 
+	/**
+	 * afterAll
+	 *
+	 * Restores shared state changed by these specs.
+	 */
 	function afterAll(){
 		super.afterAll();
 	}
 
 	// Builds a fresh parser fed with the given robots.txt content and user agent.
 	// RobotsParser is transient, so getInstance() returns a new one each call.
+	/**
+	 * parserFor
+	 *
+	 * Returns a RobotsParser loaded with the given rules.
+	 */
 	private any function parserFor( required string content, string userAgent = "testbot" ){
 		var p = getInstance( "RobotsParser@sitemap-spider" );
 		p.parse( arguments.content, arguments.userAgent );
 		return p;
 	}
 
+	/**
+	 * run
+	 *
+	 * Defines the RobotsParserSpec examples.
+	 */
 	function run(){
 		describe( "RobotsParser", function(){
 
@@ -127,13 +132,10 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					expect( p.isPathAllowed( "/other.cfm" ) ).toBeTrue();
 				} );
 
-				// Task 17 RFC 9309 §2.2.1: match the group token against the
-				// crawler's product token by case-insensitive equality, not a
-				// substring of the whole user agent.
+				// Match the group to the exact product token, ignoring case.
 
 				it( "does not match a group token that is only a substring of the product token", function(){
-					// Group "spider" must NOT capture crawler "sitemap-spider"; it
-					// falls back to the "*" group instead.
+					// "spider" does not match "sitemap-spider", so "*" applies.
 					var content = "User-agent: *#chr(10)#Disallow: /star.cfm#chr(10)##chr(10)#User-agent: spider#chr(10)#Disallow: /spider.cfm";
 					var p = parserFor( content, "sitemap-spider" );
 					expect( p.isPathAllowed( "/star.cfm" ) ).toBeFalse();   // "*" group applies
@@ -156,8 +158,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			describe( "isPathAllowed() query-string matching", function(){
 
-				// Task 17: the caller may pass "path?query", so a rule that targets
-				// the query string can match.
+				// Rules can match the query string passed with the path.
 
 				it( "blocks a path whose query matches a query pattern", function(){
 					var p = parserFor( "User-agent: *#chr(10)#Disallow: /*?sort=" );

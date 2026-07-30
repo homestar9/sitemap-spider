@@ -6,7 +6,9 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     property name="logger" inject="logbox:logger:{this}";
 
     /**
-     * Initializes the parser
+     * init
+     *
+     * Sets the allowed host to an empty value.
      */
     function init( ) {
         variables.hostName = "";
@@ -15,41 +17,25 @@ component accessors=true hint="Parses HTML content to extract links and metadata
 
 
     /**
-     * Parses HTML into a jSoup document.
+     * parseHtml
+     *
+     * Parses HTML into a jsoup document.
+     *
      * @html The raw HTML to parse.
-     * @baseUri The page's own URL. jsoup resolves every relative href/src against
-     *   it, which is what makes link.attr( "abs:href" ) in getLinks return an
-     *   absolute URL for a relative <a href>. A <base href> tag inside the HTML
-     *   overrides this value, so passing the fetched URL is safe for pages that
-     *   have a base tag and fixes the ones that do not. Defaults to "" (no base),
-     *   which resolves relative hrefs to "".
+     * @baseUri Page URL used to resolve relative links. A <base> tag overrides it.
      */
     any function parseHtml( required string html, string baseUri = "" ) {
         return jSoup.parse( arguments.html, arguments.baseUri );
     }
 
     /**
-     * Extracts links from a page.
-     * @page The jSoup document. It must have been parsed with a base URI (see
-     *   parseHtml) or carry a <base href> tag, otherwise a relative href resolves
-     *   to "" and is dropped by isUrlAllowed.
+     * getLinks
      *
-     * Returns a struct { links, ignored }:
-     *   - links: an array of crawlable, deduped, absolute URL strings.
-     *   - ignored: an array of { url, reason } structs for links this page had but
-     *     dropped, so the caller can see what was skipped and why. The only reason
-     *     this function reports is "nofollow" (a link with rel="nofollow"). The
-     *     crawler adds the other reasons ("excluded", "disallowed") later, since
-     *     excludeUrls and robots.txt are Crawler concerns, not Parser ones.
+     * Returns unique crawlable links and on-host links marked nofollow.
+     * Off-host links, blocked URL types, and duplicates are omitted.
      *
-     * Off-host links and links matching notAllowedPattern (images, css/js,
-     * mailto:, tel:) are dropped silently and are NOT reported in ignored. They
-     * are not "our" links, so reporting every one of them would flood the list.
-     * In-page duplicates are also dropped silently.
-     *
-     * The checks run in order so only on-host, allowed links can be reported as
-     * nofollow: an off-host nofollow link is filtered by isUrlAllowed first and
-     * never reaches the nofollow check.
+     * @page jsoup document with a base URI or <base> tag.
+     * @return A struct with links and ignored arrays.
      */
     struct function getLinks( required any page ) {
         var links   = [ ];
@@ -58,14 +44,14 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             var linkUrl = cleanUrl( arguments.link.attr( "abs:href" ) );
             logger.info( "Found link: #linkUrl#" );
             if ( !isUrlAllowed( linkUrl ) ) {
-                return; // off-host / image / mailto: dropped silently
+                return; // Skip off-host URLs and blocked URL types.
             }
             if ( isNoFollow( arguments.link ) ) {
                 ignored.append( { "url": linkUrl, "reason": "nofollow" } );
                 return;
             }
             if ( links.find( linkUrl ) ) {
-                return; // in-page duplicate: dropped silently
+                return; // Skip duplicates from this page.
             }
             links.append( linkUrl );
         } );
@@ -73,33 +59,28 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Extracts image URLs from a page for an image sitemap.
-     * @page The jSoup document. It must have been parsed with a base URI (see
-     *   parseHtml) or carry a <base href> tag, so a relative src resolves to an
-     *   absolute URL via attr( "abs:src" ).
+     * getImages
      *
-     * Returns an array of absolute image URL strings. Unlike page links, images
-     * are NOT host-filtered: an image sitemap may reference images served from a
-     * CDN or another host. Empty and data: URIs are skipped, in-page duplicates
-     * are dropped, and the list is capped at 1000 (Google's per-URL image limit).
+     * Returns up to 1,000 unique absolute image URLs. Images can use another host.
+     *
+     * @page jsoup document with a base URI or <base> tag.
      */
     array function getImages( required any page ) {
         var images = [];
         var seen   = {};
         arguments.page.select( "img[src]" ).each( function( img ) {
-            // Check the raw src first: jsoup resolves an empty src="" against the
-            // base URI to the page URL, so abs:src would look non-empty. A data:
-            // URI is an inline image, not a fetchable URL, so skip it too.
+            // Check raw src because jsoup resolves src="" to the page URL.
+            // data: values are inline images and cannot be crawled.
             var rawSrc = trim( arguments.img.attr( "src" ) );
             if ( !len( rawSrc ) || left( rawSrc, 5 ) == "data:" ) {
                 return;
             }
             var src = trim( arguments.img.attr( "abs:src" ) );
             if ( !len( src ) ) {
-                return; // could not resolve to an absolute URL
+                return; // The image URL could not be resolved.
             }
             if ( seen.keyExists( src ) || images.len() >= 1000 ) {
-                return; // duplicate on this page, or past the per-URL cap
+                return; // Skip duplicates and images past Google's limit.
             }
             seen[ src ] = true;
             images.append( src );
@@ -108,42 +89,30 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Extracts hreflang alternate-language links from a page for the sitemap's
-     * <xhtml:link> entries.
-     * @page The jSoup document. It must have been parsed with a base URI (see
-     *   parseHtml) or carry a <base href> tag, so a relative href resolves to an
-     *   absolute URL via attr( "abs:href" ).
+     * getAlternateLinks
      *
-     * Returns an array of { hreflang, href } structs, one per
-     * <link rel="alternate" hreflang="..." href="..."> tag. The href is emitted
-     * exactly as the page declared it (after resolving a relative value): no
-     * cleanUrl() normalization, no host filter, no check that the target was
-     * crawled. hreflang points at other-language versions of the page, which
-     * usually live on other hosts, so filtering would defeat the feature. The
-     * hreflang value is trimmed but never validated, so "x-default" passes.
+     * Returns up to 1,000 unique hreflang and href pairs. The href can use
+     * another host and is not required to appear in the crawl.
      *
-     * Tags with an empty hreflang or an empty href are skipped. Exact duplicate
-     * hreflang+href pairs are dropped, and the list is capped at 1000 as a
-     * defensive limit (same cap as getImages).
+     * @page jsoup document with a base URI or <base> tag.
      */
     array function getAlternateLinks( required any page ) {
         var alternates = [ ];
         var seen       = { };
         arguments.page.select( "link[rel=alternate][hreflang]" ).each( function( link ) {
             var hreflang = trim( arguments.link.attr( "hreflang" ) );
-            // Check the raw href first: jsoup resolves an empty href="" against
-            // the base URI to the page URL, so abs:href would look non-empty.
+            // Check raw href because jsoup resolves href="" to the page URL.
             var rawHref = trim( arguments.link.attr( "href" ) );
             if ( !len( hreflang ) || !len( rawHref ) ) {
                 return;
             }
             var href = trim( arguments.link.attr( "abs:href" ) );
             if ( !len( href ) ) {
-                return; // could not resolve to an absolute URL
+                return; // The alternate URL could not be resolved.
             }
             var pairKey = hreflang & "|" & href;
             if ( seen.keyExists( pairKey ) || alternates.len() >= 1000 ) {
-                return; // duplicate pair on this page, or past the defensive cap
+                return; // Skip duplicate pairs and entries past the limit.
             }
             seen[ pairKey ] = true;
             alternates.append( { "hreflang": hreflang, "href": href } );
@@ -152,48 +121,21 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Extracts video metadata from a page for the sitemap's <video:video>
-     * blocks.
-     * @page The jSoup document. It must have been parsed with a base URI (see
-     *   parseHtml) or carry a <base href> tag, so relative URLs resolve.
+     * getVideos
      *
-     * Returns an array of structs, each with all six keys:
-     *   { title, description, thumbnailLoc, contentLoc, playerLoc, duration }
+     * Returns up to 100 valid, unique videos from JSON-LD, Open Graph, and
+     * <video> elements, in that order. Each result contains title, description,
+     * thumbnailLoc, contentLoc, playerLoc, and duration.
      *
-     * Three sources are read, in this order:
-     *   1. JSON-LD VideoObject entries in <script type="application/ld+json">
-     *      blocks. name/description/thumbnailUrl/contentUrl/embedUrl/duration
-     *      map to the six keys. Read first on purpose: a VideoObject describes
-     *      one specific video, so its title and description beat the
-     *      page-level text the other two sources fall back to, and it is the
-     *      only source that can supply both a media URL and a player URL.
-     *   2. Open Graph meta tags (at most one video per page). The player URL is
-     *      the first non-empty of og:video:secure_url, og:video:url, og:video,
-     *      and becomes playerLoc — OG video URLs are embed/player pages, and
-     *      Google requires content_loc to be an actual media file.
-     *   3. <video> elements, in document order. The media URL comes from the
-     *      src attribute, or the first <source src> child when src is absent,
-     *      and becomes contentLoc. The poster attribute is the thumbnail.
+     * Google requires a title, description, thumbnail, and content or player
+     * URL. Incomplete videos are omitted. Earlier sources win when URLs repeat.
      *
-     * Required text fields fall back to page-level values: og:title then
-     * <title> for the title, og:description then <meta name=description> for
-     * the description, og:image for a missing thumbnail.
-     *
-     * Google requires a thumbnail, title, description, and a content or player
-     * URL per video. A candidate still missing any of those after the fallbacks
-     * is dropped silently — the SitemapGenerator never validates. Duplicates
-     * are emitted once and the first occurrence wins, which is why JSON-LD is
-     * collected first. A candidate is a duplicate when either of its URLs was
-     * already used by an earlier one, so a JSON-LD entry carrying both a
-     * contentUrl and an embedUrl also swallows a later og:video naming that
-     * same embed URL. Capped at 100 videos per page as a defensive limit.
+     * @page jsoup document with a base URI or <base> tag.
      */
     array function getVideos( required any page ) {
         var baseUri = arguments.page.baseUri();
 
-        // Page-level fallbacks, computed once. Title falls back from og:title
-        // to the <title> tag; description from og:description to
-        // <meta name=description>; the thumbnail fallback is og:image.
+        // Read page-level values used when a video has no value of its own.
         var pageTitle = metaContent( arguments.page, "meta[property=og:title]" );
         if ( !len( pageTitle ) ) {
             pageTitle = trim( arguments.page.title() );
@@ -204,13 +146,10 @@ component accessors=true hint="Parses HTML content to extract links and metadata
         }
         var pageThumbnail = resolveAgainstBase( metaContent( arguments.page, "meta[property=og:image]" ), baseUri );
 
-        // Candidates are collected first, then validated/deduped below, so the
-        // append logic lives in one place.
+        // Collect every source before validating and removing duplicates.
         var candidates = [ ];
 
-        // Source 1: JSON-LD VideoObject entries. Each one carries its own
-        // title, description and thumbnail, so the page-level values are only
-        // a fallback here.
+        // Read JSON-LD VideoObject entries first.
         for ( var videoObject in jsonLdVideoObjects( arguments.page ) ) {
             var jsonLdTitle = jsonLdString( videoObject, "name" );
             var jsonLdDescription = jsonLdString( videoObject, "description" );
@@ -225,8 +164,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             } );
         }
 
-        // Source 2: Open Graph. secure_url is preferred per the OG spec's own
-        // ordering; plain og:video is the common shorthand.
+        // Read one Open Graph player URL. Prefer its secure form.
         var ogUrl = metaContent( arguments.page, "meta[property=og:video:secure_url]" );
         if ( !len( ogUrl ) ) {
             ogUrl = metaContent( arguments.page, "meta[property=og:video:url]" );
@@ -246,12 +184,9 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             } );
         }
 
-        // Source 3: <video> elements. HTML has no per-element title or
-        // description, so those always come from the page-level fallbacks.
+        // Read HTML <video> elements with page-level title and description.
         for ( var element in arguments.page.select( "video" ) ) {
-            // The media file: the element's own src, else its first
-            // <source src> child. Raw attributes are checked before abs: ones
-            // because jsoup resolves an empty src="" to the page URL.
+            // Use the element's src or its first non-empty <source> child.
             var contentLoc = "";
             if ( len( trim( element.attr( "src" ) ) ) ) {
                 contentLoc = trim( element.attr( "abs:src" ) );
@@ -277,11 +212,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             } );
         }
 
-        // Validate, dedupe, and cap. A candidate is deduped on every URL it
-        // has, not just one, because a JSON-LD entry can name a media file and
-        // a player page while a later og:video names only that same player
-        // page. Earlier candidates win, so JSON-LD beats Open Graph and Open
-        // Graph beats a <video> tag.
+        // Remove incomplete and duplicate videos. Compare every content and player URL.
         var videos = [ ];
         var seen   = { };
         for ( var candidate in candidates ) {
@@ -309,7 +240,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
                 }
             }
             if ( isDuplicate || videos.len() >= 100 ) {
-                continue; // duplicate on this page, or past the defensive cap
+                continue; // Skip duplicates and videos past the limit.
             }
             for ( var candidateUrl in candidateUrls ) {
                 seen[ candidateUrl ] = true;
@@ -320,8 +251,9 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Returns the trimmed content attribute of the first element matching the
-     * selector, or "" when the page has no match.
+     * metaContent
+     *
+     * Returns the first matching content attribute, or an empty string.
      */
     private string function metaContent( required any page, required string selector ) {
         var found = arguments.page.select( arguments.selector );
@@ -332,14 +264,10 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Resolves a possibly-relative URL string against a base URL and returns
-     * the absolute form, or "" when it cannot be resolved.
+     * resolveAgainstBase
      *
-     * Needed because jsoup's "abs:" attribute prefix only resolves real URL
-     * attributes (href, src, poster), not a URL held in a meta tag's content
-     * attribute. Uses java.net.URL's two-argument constructor; an
-     * already-absolute value is returned unchanged (the constructor ignores the
-     * base then). With an empty base, only an already-absolute value survives.
+     * Resolves a relative URL against baseUrl. jsoup cannot resolve URLs stored
+     * in a meta tag's content attribute.
      */
     private string function resolveAgainstBase( required string raw, required string baseUrl ) {
         var target = trim( arguments.raw );
@@ -358,13 +286,11 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Returns every schema.org VideoObject found in the page's
-     * <script type="application/ld+json"> blocks, as raw deserialized structs.
+     * jsonLdVideoObjects
      *
-     * A block that is not valid JSON is skipped without throwing, because a
-     * broken JSON-LD block on one page must not fail the whole crawl. Script
-     * content is read with jsoup's data() rather than text(), because text()
-     * returns nothing for a <script> element.
+     * Returns VideoObject structs from the page's JSON-LD scripts.
+     * Invalid JSON is skipped so one script cannot fail the crawl. jsoup data()
+     * must be used because text() does not return script contents.
      */
     private array function jsonLdVideoObjects( required any page ) {
         var found = [ ];
@@ -376,8 +302,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             try {
                 collectVideoObjects( deserializeJSON( raw ), found, 0 );
             } catch ( any e ) {
-                // isJSON said yes but the engine could not build a value from
-                // it. Same treatment as malformed: skip this block only.
+                // Skip a value the current engine could not deserialize.
                 logger.debug( "Skipping unreadable JSON-LD block: #e.message#" );
             }
         }
@@ -385,15 +310,14 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Walks a deserialized JSON-LD value and appends every VideoObject struct
-     * it finds to the found array.
+     * collectVideoObjects
      *
-     * One recursive walk covers all the shapes real pages use: a single
-     * object, a top-level array of them, entries under "@graph", and a
-     * VideoObject nested inside another type (a WebPage's "video" property, or
-     * a VideoObject's own "hasPart"). It keeps descending into a VideoObject's
-     * keys for that last case. Depth and count are capped so a deeply nested
-     * or huge block cannot stall the crawl.
+     * Recursively adds VideoObject structs from a JSON-LD value. Depth and
+     * result limits prevent a large script from delaying the crawl.
+     *
+     * @node JSON-LD value to walk.
+     * @found Array that receives each match.
+     * @depth How far into the document this call is.
      */
     private void function collectVideoObjects( required any node, required array found, numeric depth = 0 ) {
         if ( arguments.depth > 10 || arguments.found.len() >= 100 ) {
@@ -417,12 +341,10 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * True when a JSON-LD struct's "@type" says it is a VideoObject.
+     * isVideoObject
      *
-     * @type can be a single string or an array of them. Only the last
-     * "/"-delimited segment is compared, so the full IRI form
-     * "http://schema.org/VideoObject" counts too. CFML's == compares strings
-     * case-insensitively, which is what we want here.
+     * Returns whether a JSON-LD @type names VideoObject. @type can be a string,
+     * an array, or a full schema.org URL.
      */
     private boolean function isVideoObject( required struct node ) {
         if ( !arguments.node.keyExists( "@type" ) ) {
@@ -439,6 +361,8 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
+     * jsonLdString
+     *
      * Returns a JSON-LD struct's value for a key as a trimmed string, or ""
      * when the key is missing or holds something that is not a simple value.
      */
@@ -451,11 +375,9 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Returns the first usable URL held under a JSON-LD key, or "".
+     * jsonLdUrl
      *
-     * The value can be a plain string, an array (thumbnailUrl is commonly an
-     * array of sizes — the first one wins), or a nested object such as an
-     * ImageObject, where the URL sits under "url" or "contentUrl".
+     * Returns the first URL stored as a string, array value, or nested object.
      */
     private string function jsonLdUrl( required struct node, required string key ) {
         if ( !arguments.node.keyExists( arguments.key ) ) {
@@ -465,8 +387,9 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Pulls a URL string out of a JSON-LD value that may be a string, an array,
-     * or a nested object. Returns "" when there is nothing usable.
+     * firstUrlValue
+     *
+     * Returns the first URL found in a JSON-LD value.
      */
     private string function firstUrlValue( required any value ) {
         if ( isSimpleValue( arguments.value ) ) {
@@ -492,20 +415,11 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Converts an ISO 8601 duration such as "PT1M33S" to whole seconds.
+     * iso8601Seconds
      *
-     * Returns 0 when the value cannot be read or falls outside the 1–28800
-     * second range Google's video sitemap schema allows, so the generator can
-     * emit <video:duration> whenever this is above zero and never has to
-     * validate. A plain number is accepted as seconds, because some sites
-     * write duration that way.
-     *
-     * The value is split at "T" before any digits are read, because "M" means
-     * months in the date half and minutes in the time half. Only day, hour,
-     * minute and second parts are supported; a months or years part returns 0
-     * rather than guessing how long a month is. Written with reMatchNoCase
-     * instead of one big pattern so it behaves the same on Lucee, Adobe
-     * ColdFusion and BoxLang.
+     * Converts an ISO-8601 duration or numeric value to whole seconds.
+     * Returns 0 outside Google's 1–28,800 second range. Month and year values
+     * also return 0 because they do not have a fixed number of seconds.
      */
     private numeric function iso8601Seconds( required string raw ) {
         var value = trim( arguments.raw );
@@ -520,7 +434,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             var timeStart = body.findNoCase( "T" );
             var datePart = timeStart ? ( timeStart > 1 ? left( body, timeStart - 1 ) : "" ) : body;
             var timePart = timeStart ? mid( body, timeStart + 1, len( body ) ) : "";
-            // A months or years part has no fixed length in seconds.
+            // Months and years do not have a fixed number of seconds.
             if ( reFindNoCase( "[0-9][YM]", datePart ) ) {
                 return 0;
             }
@@ -547,22 +461,13 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Gets the last modified date from a fetch result as a real date object.
-     * @fetchResult The fetch result containing headers and body.
-     * @parsedPage The jSoup document for the page (optional). When present, its
-     *   meta tags are read as a fallback when the HTTP header is missing.
+     * getLastModified
      *
-     * Returns a date object, or "" when no usable date is found. This function
-     * is the single owner of last-modified *parsing*; the SitemapGenerator owns
-     * *formatting*, so it receives a plain date-or-empty value and never has to
-     * guess the format.
+     * Returns a parsed last-modified date, or an empty string. It checks the
+     * Last-Modified header, last-modified meta tag, then article:modified_time.
      *
-     * Sources are tried in order:
-     *   1. The HTTP "Last-Modified" response header (RFC 1123, e.g.
-     *      "Wed, 21 Oct 2026 07:28:00 GMT").
-     *   2. A <meta name="last-modified" content="..."> tag.
-     *   3. A <meta property="article:modified_time" content="..."> Open Graph
-     *      tag (ISO 8601).
+     * @fetchResult Fetch result containing response headers.
+     * @parsedPage Optional jsoup document used for meta-tag fallbacks.
      */
     any function getLastModified( required any fetchResult, any parsedPage ) {
         if ( fetchResult.headers.keyExists( "Last-Modified" ) ) {
@@ -572,7 +477,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             }
         }
 
-        // Fall back to meta tags on the parsed page, in priority order.
+        // Check page metadata when the response header has no usable date.
         if ( arguments.keyExists( "parsedPage" ) && !isNull( arguments.parsedPage ) ) {
             for ( var selector in [ "meta[name=last-modified]", "meta[property=article:modified_time]" ] ) {
                 var meta = arguments.parsedPage.select( selector );
@@ -589,20 +494,12 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Parses a last-modified string into a date object, or returns "" when it
-     * cannot be parsed.
-     * @raw The raw date string (an HTTP header value or a meta-tag content value).
+     * parseLastModifiedString
      *
-     * HTTP dates use RFC 1123 (e.g. "Wed, 21 Oct 2026 07:28:00 GMT"), which
-     * CFML's isDate()/parseDateTime() do not reliably accept across Lucee,
-     * Adobe, and BoxLang. Java's DateTimeFormatter.RFC_1123_DATE_TIME parses it
-     * the same way on every engine, so it is tried first. Meta-tag values are
-     * usually ISO 8601 (e.g. "2026-07-15T10:00:00+00:00"); those go through the
-     * native parseDateTime() when isDate() accepts them, else Java's
-     * OffsetDateTime as a last resort.
+     * Parses RFC-1123 or ISO-8601 text into a date. Java handles RFC-1123
+     * consistently across Adobe, Lucee, and BoxLang. Invalid text returns "".
      *
-     * Each Java parse is wrapped in try/catch so an unparseable value returns ""
-     * instead of throwing.
+     * @raw HTTP header or meta-tag date text.
      */
     private any function parseLastModifiedString( required string raw ) {
         var value = trim( arguments.raw );
@@ -610,21 +507,21 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             return "";
         }
 
-        // 1. RFC 1123 HTTP-date (the "... GMT" header format).
+        // Try the RFC-1123 HTTP header format.
         try {
             var rfc1123 = createObject( "java", "java.time.format.DateTimeFormatter" ).RFC_1123_DATE_TIME;
             var zdt = createObject( "java", "java.time.ZonedDateTime" ).parse( javaCast( "string", value ), rfc1123 );
             return createObject( "java", "java.util.Date" ).init( javaCast( "long", zdt.toInstant().toEpochMilli() ) );
         } catch ( any e ) {
-            // Not an RFC 1123 date; fall through to the ISO handling below.
+            // Continue with ISO formats.
         }
 
-        // 2. ISO 8601 / general date the engine already understands.
+        // Use the engine's date parser when possible.
         if ( isDate( value ) ) {
             return parseDateTime( value );
         }
 
-        // 3. ISO 8601 with an explicit offset, via Java as a last resort.
+        // Use Java for an ISO-8601 value with an explicit offset.
         try {
             var odt = createObject( "java", "java.time.OffsetDateTime" ).parse( javaCast( "string", value ) );
             return createObject( "java", "java.util.Date" ).init( javaCast( "long", odt.toInstant().toEpochMilli() ) );
@@ -634,19 +531,12 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Checks whether a page asked search engines not to index it.
-     * @fetchResult The fetch result containing headers and body.
-     * @parsedPage The jSoup document for the page (optional). When absent, only
-     *   the response header is checked — this is the non-HTML case.
+     * isNoIndex
      *
-     * Returns true when either source carries a noindex (or none) directive:
-     *   1. The "X-Robots-Tag" response header.
-     *   2. Any <meta name="robots"> tag on the page. A page can have several,
-     *      and jsoup matches the name attribute case-insensitively, so
-     *      <META NAME="ROBOTS"> is covered.
+     * Returns whether X-Robots-Tag or a robots meta tag contains noindex or none.
      *
-     * The crawler uses this to leave the page out of the sitemap while still
-     * following its links, because noindex does not imply nofollow.
+     * @fetchResult Fetch result containing response headers.
+     * @parsedPage Optional jsoup document. Non-HTML responses omit it.
      */
     boolean function isNoIndex( required struct fetchResult, any parsedPage ) {
         if (
@@ -668,22 +558,17 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * True when a robots directive list contains a "noindex" or "none" token
-     * ("none" means noindex + nofollow).
-     * @value The raw directive list, e.g. "noindex, follow".
+     * hasNoIndexToken
      *
-     * Directives are comma-separated. An X-Robots-Tag value can scope a
-     * directive to one crawler with a colon ("googlebot: noindex"); the part
-     * after the colon is compared, so an agent-scoped noindex counts as a
-     * global one. That deliberately over-excludes: a page hidden from any
-     * named crawler is left out of the sitemap for all of them, which is the
-     * safe reading for a sitemap.
+     * Returns whether a robots directive contains noindex or none. A directive
+     * scoped to a named crawler also counts.
+     *
+     * @value Comma-separated robots directives.
      */
     private boolean function hasNoIndexToken( required string value ) {
         for ( var token in listToArray( arguments.value, "," ) ) {
             var directive = trim( token );
-            // "googlebot: noindex" scopes the directive to one agent; compare
-            // the directive part after the colon.
+            // Compare the directive after an optional crawler name.
             var colonPos = directive.find( ":" );
             if ( colonPos > 0 ) {
                 directive = trim( mid( directive, colonPos + 1, len( directive ) ) );
@@ -695,8 +580,16 @@ component accessors=true hint="Parses HTML content to extract links and metadata
         return false;
     }
 
+    /**
+     * getCanonicalUrl
+     *
+     * Returns the canonical URL from HTML or the HTTP Link header.
+     *
+     * @fetchResult Fetch result containing response headers.
+     * @parsedPage Optional jsoup document.
+     */
     string function getCanonicalUrl( required struct fetchResult, any parsedPage ) {
-        // If parsedPage is provided, use it; otherwise, parse the HTML from fetchResult
+        // Prefer the page's canonical link.
         if ( arguments.keyExists( "parsedPage" ) ) {
             var canonical = arguments.parsedPage.select( "link[rel=canonical]" );
             if ( canonical.size() ) {
@@ -704,10 +597,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             }
         }
 
-        // Next try the Link header, which looks like:
-        // <https://example.com/page.html>; rel="canonical"
-        // A single Link header can carry several comma-separated relations, so the
-        // header is tokenized and the canonical entry is found wherever it sits.
+        // Fall back to the canonical relation in the Link header.
         if ( fetchResult.headers.keyExists( "Link" ) ) {
             return findCanonicalInLinkHeader( fetchResult.headers[ "Link" ] );
         }
@@ -716,23 +606,19 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Splits an HTTP Link header (RFC 8288) into its entries.
-     * @header The raw Link header value.
+     * parseLinkHeader
      *
-     * Returns an array of { uri, params } structs. uri is the target inside the
-     * angle brackets; params is a struct of the ";name=value" parameters after it,
-     * with names lowercased and any surrounding quotes stripped from values.
+     * Splits an RFC-8288 Link header without treating commas inside URLs or
+     * quoted values as separators.
      *
-     * The header is scanned one character at a time so a comma only separates
-     * entries when it is not inside the "<...>" URI and not inside a quoted "..."
-     * value. That keeps a comma in a URL (e.g. /a,b) or in a quoted parameter
-     * (e.g. title="Smith, John") from splitting an entry in the wrong place.
+     * @header Raw Link header.
+     * @return Entries with uri and params keys.
      */
     private array function parseLinkHeader( required string header ) {
         var entries   = [];
         var current   = "";
-        var inUri     = false; // between "<" and ">"
-        var inQuote   = false; // inside a double-quoted value
+        var inUri     = false; // True between < and >.
+        var inQuote   = false; // True inside a quoted value.
         var chars     = arguments.header;
 
         for ( var i = 1; i <= len( chars ); i++ ) {
@@ -758,12 +644,11 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Parses one Link header entry ("<uri>; name=value; ...") into { uri, params }.
-     * @entry A single entry, already split off from the full header.
+     * parseLinkEntry
      *
-     * The URI is read from between the first "<" and ">". Each ";"-separated
-     * parameter after it is stored under its lowercased name, with surrounding
-     * quotes removed from the value. An entry with no "<...>" yields an empty uri.
+     * Parses one Link header entry into uri and params.
+     *
+     * @entry Entry already separated from the full header.
      */
     private struct function parseLinkEntry( required string entry ) {
         var result = { uri : "", params : {} };
@@ -773,7 +658,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             result.uri = trim( mid( arguments.entry, open + 1, close - open - 1 ) );
         }
 
-        // Everything after ">" is the parameter list.
+        // Parse parameters after the closing >.
         var rest = close > 0 ? mid( arguments.entry, close + 1, len( arguments.entry ) ) : "";
         for ( var part in listToArray( rest, ";" ) ) {
             var eqPos = part.find( "=" );
@@ -782,7 +667,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             }
             var name  = trim( part.left( eqPos - 1 ) );
             var value = trim( mid( part, eqPos + 1, len( part ) ) );
-            // Strip one pair of surrounding double quotes if present.
+            // Remove one pair of surrounding quotes.
             if ( len( value ) >= 2 && value.startsWith( '"' ) && value.endsWith( '"' ) ) {
                 value = mid( value, 2, len( value ) - 2 );
             }
@@ -794,14 +679,11 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Finds the canonical URL in a Link header, or "" when none is present.
-     * @header The raw Link header value.
+     * findCanonicalInLinkHeader
      *
-     * Walks the tokenized entries and returns the first uri whose "rel" parameter
-     * has a whitespace-separated token equal to "canonical" (case-insensitive).
-     * Requiring an exact token means a value like rel="canonicalize" is not treated
-     * as canonical, and rel may appear in any parameter position, not just first.
-     * The returned URL is raw; the caller cleans it (see Crawler.crawlUrl).
+     * Returns the first URL whose Link relation contains the exact token canonical.
+     *
+     * @header Raw Link header.
      */
     private string function findCanonicalInLinkHeader( required string header ) {
         for ( var entry in parseLinkHeader( arguments.header ) ) {
@@ -818,21 +700,12 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Finds a meta-refresh redirect target on a parsed page and returns it as an
-     * absolute, cleaned URL, or "" when the page has no such redirect.
-     * @parsedPage The jSoup document for the page.
-     * @baseUrl The page's own URL, used to resolve a relative target.
+     * getMetaRefreshUrl
      *
-     * A meta-refresh tag looks like:
-     *   <meta http-equiv="refresh" content="3;url=redirect-new.cfm">
-     * The number before the ";" is the delay in seconds; any delay counts as a
-     * redirect here. A tag with no "url=" part (e.g. content="5") just reloads the
-     * same page, so this returns "".
+     * Returns an absolute meta-refresh target, or an empty string.
      *
-     * The target is resolved against baseUrl by resolveAgainstBase, because
-     * jSoup's "abs:" attribute prefix only resolves href/src attributes, not a
-     * URL parsed out of the "content" attribute's string value. An
-     * already-absolute target is returned unchanged.
+     * @parsedPage jsoup document for the page.
+     * @baseUrl Page URL used to resolve a relative target.
      */
     string function getMetaRefreshUrl( required any parsedPage, required string baseUrl ) {
         var meta = arguments.parsedPage.select( "meta[http-equiv=refresh]" );
@@ -840,7 +713,7 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             return "";
         }
         var content = meta.first().attr( "content" );
-        // Capture the value after "url=", allowing spaces and optional quotes.
+        // Read the value after url= with optional spaces and quotes.
         var match = reFindNoCase( "url\s*=\s*[""']?([^""']+)", content, 1, true );
         if ( match.pos.len() < 2 || match.pos[ 2 ] == 0 ) {
             return "";
@@ -858,29 +731,18 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Cleans and normalizes a URL string.
-     * @url The URL to clean
+     * cleanUrl
      *
-     * This is the single owner of URL-string normalization; the Crawler calls it
-     * too (it replaced Crawler.normalizeUrl). It trims the ends, converts
-     * backslashes to forward slashes, encodes interior spaces as %20, collapses
-     * repeated slashes after the protocol, and strips the fragment.
+     * Trims and normalizes a URL before it enters crawl state.
      *
-     * Encoding " " as "%20" after trimming never touches an existing %20, so an
-     * already-encoded URL is preserved. The steps are idempotent, so calling
-     * cleanUrl again on an already-cleaned URL returns the same string.
-     *
-     * The final step applies the normalization policy (see normalizeUrl):
-     * lowercase scheme + host, and strip session/tracking params. This runs last
-     * so every URL that enters the crawl's dedup sets or the sitemap is already
-     * normalized.
+     * @url URL to clean.
      */
     string function cleanUrl( required string url ) {
-        var cleaned = trim( arguments.url );          // drop leading/trailing whitespace
-        cleaned = cleaned.replace( "\", "/", "all" ); // backslash -> forward slash
-        cleaned = reReplace( cleaned, "^(https?://[^/]+)//+", "\1/", "ALL" ); // collapse double slashes after protocol
-        cleaned = cleaned.replace( " ", "%20", "all" ); // encode interior spaces
-        // Remove the fragment, including the "#" itself (e.g., "page#anchor" -> "page")
+        var cleaned = trim( arguments.url );          // Remove surrounding whitespace.
+        cleaned = cleaned.replace( "\", "/", "all" ); // Use forward slashes.
+        cleaned = reReplace( cleaned, "^(https?://[^/]+)//+", "\1/", "ALL" ); // Collapse extra path slashes.
+        cleaned = cleaned.replace( " ", "%20", "all" ); // Encode spaces.
+        // Remove the fragment, including #.
         var fragmentIndex = cleaned.find( "##" );
         if ( fragmentIndex > 0 ) {
             cleaned = cleaned.left( fragmentIndex - 1 );
@@ -889,23 +751,13 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Applies the crawl's URL normalization policy so the same page always maps
-     * to one dedup key and one sitemap entry, and session tokens never leak into
-     * recorded URLs.
-     * @url A URL whose string form is already cleaned (see cleanUrl).
+     * normalizeUrl
      *
-     * What it does:
-     *   - Lowercases the scheme and host (both are case-insensitive per spec).
-     *   - Preserves path case (URL paths ARE case-sensitive per spec).
-     *   - Keeps userinfo, port, and query values unchanged.
-     *   - Strips the session/tracking params named in settings.sessionParams from
-     *     the query string, and strips a ";jsessionid=..." path parameter.
+     * Lowercases the scheme and host and removes configured session parameters.
+     * Path case is preserved because URL paths can be case-sensitive. Values that
+     * are not absolute HTTP or HTTPS URLs are returned unchanged.
      *
-     * Only http and https URLs with a host are transformed. Anything java.net.URL
-     * cannot parse (a relative href, mailto:, tel:, javascript:) is returned
-     * unchanged, because those are filtered later by isUrlAllowed and must pass
-     * through here untouched. The rebuild is idempotent, so re-normalizing an
-     * already-normalized URL returns the same string.
+     * @url URL already cleaned by cleanUrl().
      */
     private string function normalizeUrl( required string url ) {
         try {
@@ -913,18 +765,17 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             var protocol = urlObj.getProtocol();
             var host     = urlObj.getHost();
 
-            // Only http/https URLs with a host get normalized; leave the rest as-is.
+            // Normalize only absolute HTTP and HTTPS URLs.
             if ( ( protocol != "http" && protocol != "https" ) || !len( host ) ) {
                 return arguments.url;
             }
 
-            var userInfo = urlObj.getUserInfo(); // null when absent
-            var port     = urlObj.getPort();     // -1 when no explicit port
-            var path     = urlObj.getPath();     // "" when absent
-            var query    = urlObj.getQuery();    // null when absent
+            var userInfo = urlObj.getUserInfo(); // null when absent.
+            var port     = urlObj.getPort();     // -1 when absent.
+            var path     = urlObj.getPath();     // Empty when absent.
+            var query    = urlObj.getQuery();    // null when absent.
 
-            // Strip a ";jsessionid=..." path parameter (servlet session token),
-            // case-insensitive, from any path segment.
+            // Remove servlet session IDs from every path segment.
             path = reReplaceNoCase( path, ";jsessionid=[^/]*", "", "all" );
 
             var rebuilt = lCase( protocol ) & "://";
@@ -943,21 +794,18 @@ component accessors=true hint="Parses HTML content to extract links and metadata
             }
             return rebuilt;
         } catch ( any e ) {
-            // Not parseable as an absolute URL (relative, mailto:, tel:, ...).
-            // Leave it to the other filters; return unchanged.
+            // Other filters handle relative and non-HTTP values.
             return arguments.url;
         }
     }
 
     /**
-     * Removes the session/tracking params named in settings.sessionParams from a
-     * query string and returns the surviving pairs joined with "&" (or "" when
-     * none survive).
-     * @query The raw query string (no leading "?").
+     * stripSessionParams
      *
-     * Param names are matched case-insensitively: the drop list is a CFML struct,
-     * whose keyExists() is itself case-insensitive, so "CFID" matches the "cfid"
-     * key. Only the name (the part before "=") is compared; values are untouched.
+     * Removes configured session and tracking parameters from a query string.
+     * Parameter names are matched case-insensitively. Values are not changed.
+     *
+     * @query Query string without a leading ?.
      */
     private string function stripSessionParams( required string query ) {
         if ( !len( arguments.query ) ) {
@@ -979,14 +827,12 @@ component accessors=true hint="Parses HTML content to extract links and metadata
     }
 
     /**
-     * Checks if a URL is allowed based on settings
-     * @url The URL to check
+     * isUrlAllowed
      *
-     * This is the single owner of the "is this a crawlable URL for our host?"
-     * rule; the Crawler delegates to it (it replaced Crawler.isUrlAllowed and
-     * Crawler.isUrlHostMatch). A URL is allowed when it has a value, uses the
-     * http or https protocol, its host matches variables.hostName, and it does
-     * not match settings.notAllowedPattern (images, css/js, mailto:, tel:, etc.).
+     * Returns whether a URL uses HTTP or HTTPS, matches hostName, and does not
+     * match notAllowedPattern.
+     *
+     * @url URL to check.
      */
     boolean function isUrlAllowed( required string url ) {
         if ( !len( arguments.url ) ) {
@@ -1003,15 +849,16 @@ component accessors=true hint="Parses HTML content to extract links and metadata
                 host == variables.hostName &&
                 !reFindNoCase( settings.notAllowedPattern, arguments.url );
         } catch ( any e ) {
-            //logger.debug( "Invalid URL: #arguments.url# - #e.message#" );
             return false;
         }
     }
 
     /**
      * isNoFollow
-     * Checks if a link has rel="nofollow"
-     * @link The jSoup link element
+     *
+     * Returns whether a link has a nofollow relation.
+     *
+     * @link jsoup link element.
      */
     private function isNoFollow( required any link ) {
         var relAttr = link.attr( "rel" );

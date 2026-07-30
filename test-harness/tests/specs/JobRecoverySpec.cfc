@@ -1,29 +1,24 @@
 /**
- * Specs for how sitemap jobs recover when something goes wrong.
- *
- * These cover the parts that only matter when a crawl does not finish normally:
- * claiming a job so it never runs twice, spotting jobs whose process died,
- * cleaning up after a restart, and shutting down on a framework reinit.
- *
- * Nothing here really kills a server. The failure modes are driven straight
- * through the job store instead — backdating a heartbeat, writing a record from a
- * different boot — which is both faster and repeatable.
- *
- * InMemoryJobStore is exercised directly for the store-level rules. The registry
- * specs use a stub store so a fake "dead" job can be planted without running a
- * real crawl.
- *
- * Local run recipe:
- *   1. box server start serverConfigFile=server-adobe@2023.json
- *   2. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.JobRecoverySpec"
+ * Tests atomic job claims, stale heartbeats, restart recovery, and shutdown.
+ * The examples change stored records instead of stopping a real server.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
+	/**
+	 * beforeAll
+	 *
+	 * Loads the shared dependencies and fixtures for these specs.
+	 */
 	function beforeAll(){
 		super.beforeAll();
 		setup();
 	}
 
+	/**
+	 * afterAll
+	 *
+	 * Restores shared state changed by these specs.
+	 */
 	function afterAll(){
 		super.afterAll();
 	}
@@ -32,11 +27,18 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	// it as a singleton, so getInstance() would hand back a shared one. The path
 	// is passed as a string because the "-" in "sitemap-spider" would be read as
 	// a minus sign in the dotted form.
+	/**
+	 * newStore
+	 *
+	 * Returns a new in-memory job store for one example.
+	 */
 	private any function newStore(){
 		return createObject( "component", "sitemap-spider.models.jobs.InMemoryJobStore" ).init();
 	}
 
 	/**
+	 * buildRecord
+	 *
 	 * Builds a job record with sensible defaults, matching the shape
 	 * SitemapJobRegistry.queue() writes.
 	 *
@@ -77,6 +79,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return record;
 	}
 
+	/**
+	 * run
+	 *
+	 * Defines the JobRecoverySpec examples.
+	 */
 	function run(){
 		describe( "InMemoryJobStore claiming", function(){
 			it( "lets exactly one caller claim a queued job", function(){
@@ -254,6 +261,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			// planted as "already dead" without running a real crawl. The registry
 			// is a singleton shared with the rest of the suite, so its real store
 			// is always put back, even when the spec fails.
+			/**
+			 * withStubStore
+			 *
+			 * Runs a callback with a temporary job store stub.
+			 */
 			function withStubStore( required any body ){
 				var registry  = prepareMock( getInstance( "SitemapJobRegistry@sitemap-spider" ) );
 				var realStore = registry.$getProperty( "store", "variables" );

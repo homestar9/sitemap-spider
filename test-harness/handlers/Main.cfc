@@ -1,16 +1,25 @@
-﻿/**
-* My Event Handler Hint
-*/
+/**
+ * Handles the test harness home page and sample crawl.
+ */
 component{
 
 	property name="siteMap" inject="SiteMapService@sitemap-spider";
 
     
-    // Index
+	/**
+	 * index
+	 *
+	 * Renders the test harness home page.
+	 */
 	any function index( event, rc, prc ){
         event.setView( "main/index" );
 	}
 
+    /**
+     * create
+     *
+     * Runs a sample sitemap crawl.
+     */
     function create( event, rc, prc ) {
 
         var wereorganized = "http://127.0.0.1:65475/";
@@ -24,6 +33,11 @@ component{
 
     }
 
+    /**
+     * notFound
+     *
+     * Returns the test harness not-found response.
+     */
     function notFound( event, rc, prc ) {
         return "test harness not found"
     }

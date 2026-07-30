@@ -3,16 +3,15 @@ component {
     property name="settings" inject="coldbox:moduleSettings:sitemap-spider";
 
     /**
-     * Assembles the struct that fetchUrl returns, shared by every backend.
-     * @url The final URL after any redirect the backend followed.
-     * @headers A struct of response headers (name -> value string).
-     * @contentType The response Content-Type header value.
-     * @body The response body. Optional. It is added to the result under the
-     *       "html" key ONLY when it is provided and the content type is HTML or
-     *       XHTML, so callers never parse a non-HTML body (e.g. a PDF or image).
+     * buildResult
      *
-     * Each backend extracts headers its own way (jsoup exposes a multi-value Java
-     * map, Playwright a flat one), then calls this to build the same result shape.
+     * Builds the common fetch result used by every browser backend. It includes
+     * body as html only for an HTML or XHTML response.
+     *
+     * @url Final URL after redirects.
+     * @headers Response headers.
+     * @contentType Content-Type response header.
+     * @body Optional response body.
      */
     struct function buildResult(
         required string url,
@@ -32,24 +31,28 @@ component {
     }
 
     /**
-     * Releases any resources the backend holds for a crawl. Stateless backends
-     * (jsoup) inherit this no-op; a backend with a live browser overrides it.
+     * shutdown
+     *
+     * Releases resources after a crawl. Stateless browsers inherit this no-op.
      */
     void function shutdown() {
     }
 
     /**
-     * Reports whether this backend is safe to call from several crawl worker
-     * threads at once. Defaults to true for a stateless backend (jsoup builds a
-     * fresh request per fetch). A backend that reuses one shared browser
-     * page/context (Playwright) overrides this to return false.
+     * supportsParallel
+     *
+     * Returns whether several crawl workers can call this browser at once.
      */
     boolean function supportsParallel() {
         return true;
     }
 
+    /**
+     * isHtmlContentType
+     *
+     * Returns whether contentType matches the configured HTML pattern.
+     */
     private function isHtmlContentType( required string contentType ) {
-        // Check if the content type is in the allowed HTML content types
         return !!( reMatchNoCase( settings.htmlContentTypePattern, contentType ).len() );
     }
 }

@@ -1,54 +1,20 @@
 /**
- * Browser backend that renders pages with a real headless browser (Playwright),
- * so JavaScript-injected links and client-side redirects are visible to the
- * crawler. Selected by setting the browserDsl module setting to
- * "Playwright@sitemap-spider".
+ * Renders pages with Playwright so the crawler can see JavaScript content and
+ * client-side redirects.
  *
- * The cbPlaywright helper mixin is included below for its wrappers around the
- * Playwright Java option objects (launchBrowser(), navigate()). Its lifecycle
- * functions beforeAll()/afterAll() are NOT used: they call super.beforeAll() /
- * super.afterAll() and swallow the resulting "method not found" error by
- * matching Lucee's and Adobe's message wording only, so on BoxLang (different
- * wording) they rethrow and every fetch fails. This backend does its own driver
- * init (initPlaywright) and close (shutdown) instead, replicating the mixin's
- * driver resolution and version check without the super calls. This backend
- * adds the crawl-specific parts: a configurable wait for JavaScript, the
- * result-struct shape, and robots.txt fetching. Using the mixin needs a
- * "/cbPlaywright" mapping and the Playwright jars on the class path; the host
- * Application.cfc sets both (see the test-harness Application.cfc).
+ * This component uses cbPlaywright's launchBrowser() and navigate() helpers but
+ * not its lifecycle methods. Those methods can rethrow a missing-super-method
+ * error on BoxLang. initPlaywright() and shutdown() perform that work here.
  *
- * Lifecycle: the Playwright instance, one browser, one context, and one page are
- * created lazily on the first fetch and reused for the whole crawl (each fetch
- * navigates the same page). The Crawler calls shutdown() when the crawl finishes
- * to close the browser and stop the driver process.
+ * One Playwright instance, browser, context, and page are created on the first
+ * fetch and reused for the crawl. Only their creating thread can use or close
+ * them. The crawler therefore runs this backend on one thread and calls
+ * shutdown() from that thread. Each concurrent crawl starts its own Node and
+ * Chromium processes, so maxConcurrentJobs should remain low.
  *
- * Process cleanup: a normal crawl reaps the browser and its driver process in
- * crawl()'s finally via shutdown(). A hard JVM kill (kill -9, and most Windows
- * `box server stop`) can still leave orphaned Chromium `headless_shell`
- * processes behind. No JVM shutdown hook is added to catch that: a shutdown hook
- * does not run on those hard-kill paths, which is where the orphans actually
- * come from, so it would add cross-engine complexity for almost no coverage.
- * Playwright's own driver watches its stdin pipe and normally stops Chromium
- * when the JVM connection drops. An external process reaper is out of scope.
- * (Task 25 decision — see supportsParallel() for the parallel side.)
- *
- * A ColdBox reinit is a third case, and it is covered. The JVM keeps running, so
- * the stdin-pipe safety net above never fires — but ColdBox only interrupts the
- * crawl thread, and the crawl loops watch their CrawlProgress cancel flag rather
- * than the interrupt, so the thread keeps going and reaches crawl()'s finally,
- * which closes this browser normally. SitemapJobRegistry.shutdown() sets that
- * cancel flag so it happens within a page instead of at the end of the crawl.
- * Note what it deliberately does NOT do: close this browser itself. A Playwright
- * instance can only be driven from the thread that created it (see
- * supportsParallel()), so closing it from the thread handling the reinit could
- * throw or hang. The owning thread does it.
- *
- * Cost per crawl: this backend holds a Playwright instance, a Node driver
- * process, and a Chromium process, and it is resolved per Crawler. Since
- * SitemapService builds a fresh Crawler per create(), every concurrent crawl
- * using this backend runs its own full stack. A host running background jobs
- * should keep maxConcurrentJobs low, or only point specific sites at this
- * backend via the per-crawl browserDsl argument.
+ * A hard process kill can leave Chromium processes behind because no cleanup
+ * code runs. During a ColdBox reinit, SitemapJobRegistry cancels the crawl and
+ * its owning thread reaches shutdown().
  */
 component
     extends="BaseBrowser"
@@ -60,31 +26,22 @@ component
     include "/cbPlaywright/models/PlaywrightMixins.cfm";
 
     /**
-     * Fetches a URL with a headless browser and returns the rendered page.
-     * @url The URL to fetch
+     * fetchUrl
      *
-     * Navigates to the URL, waits for the page per the waitStrategy/waitMs
-     * settings so late JavaScript can run, then returns the rendered HTML and the
-     * final URL (which reflects any client-side redirect). Throws a
-     * StatusCodeException on a non-200 navigation response, matching the Jsoup
-     * backend so the Crawler records the URL as bad.
+     * Navigates to a URL, waits for JavaScript, and returns the rendered HTML.
+     * Playwright controls redirects, so maxRedirects does not apply.
      *
-     * When the navigation followed one or more HTTP redirects, the result carries
-     * a "redirectChain" array of { url, status } built from Playwright's own
-     * redirect history (observability only). Unlike the Jsoup backend, the browser
-     * follows redirects itself, so the maxRedirects hop-limit does not apply here.
+     * @url URL to fetch.
      */
     any function fetchUrl( required string url ) {
 
         var page = getPage();
-        // navigate() is a cbPlaywright mixin helper; it returns the main response.
+        // navigate() returns the main response for the page.
         var response = navigate( page, arguments.url );
 
         applyWaitStrategy( page );
 
-        // response is null for a navigation that does not produce a main response
-        // (e.g. an in-page anchor). Treat that as a 200 and read the headers from
-        // the response only when present.
+        // An in-page navigation can have no response. Treat it as successful.
         var statusCode = 200;
         var headers = {};
         if ( !isNull( response ) ) {
@@ -99,10 +56,7 @@ component
             );
         }
 
-        // page.url() is the final URL after any client-side (JavaScript) redirect;
-        // page.content() is the rendered DOM after the wait. The content type is
-        // always HTML here because a browser navigation only yields a document, so
-        // buildResult includes the body under "html".
+        // Return the final URL and rendered DOM after any client-side redirect.
         var result = buildResult(
             url = page.url().toString(),
             headers = headers,
@@ -118,18 +72,17 @@ component
     }
 
     /**
-     * Builds the { url, status } hop chain for a navigation from Playwright's
-     * redirect history. Walks request.redirectedFrom() back to the first request,
-     * then emits the hops in first-to-last order. Returns an empty array when the
-     * response is null (an in-page navigation with no main response).
-     * @response The main navigation Response, or null.
+     * buildRedirectChain
+     *
+     * Returns redirect steps from the first request through the final response.
+     *
+     * @response Main navigation response, or null.
      */
     private array function buildRedirectChain( any response ) {
         if ( isNull( arguments.response ) ) {
             return [];
         }
-        // Collect requests newest-first: redirectedFrom() links a request to the
-        // one that redirected to it.
+        // redirectedFrom() walks from the newest request to the oldest.
         var reqs = [];
         var req  = arguments.response.request();
         while ( !isNull( req ) ) {
@@ -137,9 +90,7 @@ component
             req = req.redirectedFrom();
         }
 
-        // Emit oldest-first so the chain reads requested URL -> final URL. Each
-        // request's own response gives that hop's status (the 3xx for a redirect,
-        // the final 200 for the last).
+        // Return the requests in fetch order with each response status.
         var chain = [];
         for ( var i = reqs.len(); i >= 1; i-- ) {
             var hopResponse = reqs[ i ].response();
@@ -150,12 +101,11 @@ component
     }
 
     /**
-     * Fetches the raw text body of a URL with a plain HTTP GET.
-     * @url The URL to fetch
+     * getText
      *
-     * Used for robots.txt, which is text/plain and needs no JavaScript, so this
-     * avoids the browser. Throws a StatusCodeException on a non-200 so the Crawler
-     * falls back to allow-all.
+     * Returns raw text with a plain HTTP request so robots.txt does not start a browser.
+     *
+     * @url URL to fetch.
      */
     string function getText( required string url ) {
         var httpResult = "";
@@ -175,10 +125,10 @@ component
     }
 
     /**
-     * Closes the browser and stops the Playwright driver process. Called by the
-     * Crawler when a crawl finishes. Safe to call when nothing was started and
-     * safe to call more than once; clears the cached handles so a later crawl on
-     * the same instance re-initializes.
+     * shutdown
+     *
+     * Closes Playwright resources and clears their cached handles. It is safe to
+     * call before startup or more than once.
      */
     void function shutdown() {
         if ( structKeyExists( variables, "browserInstance" ) ) {
@@ -202,37 +152,20 @@ component
     }
 
     /**
-     * Reports that this backend is not safe for parallel crawling, so the Crawler
-     * downgrades a runAsync crawl to single-threaded when the backend is this one.
+     * supportsParallel
      *
-     * The reason is a hard Playwright Java rule, not just the shared page/context
-     * in getPage: a Playwright instance and everything it creates (Browser,
-     * BrowserContext, Page) is pinned to the one thread that created it and cannot
-     * be driven from any other thread. So a per-worker context/page pool on one
-     * shared instance is impossible. The only design that would actually run in
-     * parallel is thread-local: each worker thread builds its OWN full stack —
-     * Playwright instance, Node driver process, Browser, and Chromium
-     * headless_shell. At the default asyncMaxThreads = 10 that is up to 10 headless
-     * Chrome plus 10 driver processes, each ~1-2 s to start.
-     *
-     * That was deliberately left out (task 25, closed won't-do): the Playwright
-     * backend is used for JS-heavy sites, and those crawls are usually small (a
-     * handful of pages), so the process cost far outweighs the wall-clock gain.
-     * Revisit only for a genuinely large JS-rendered crawl, and cap the worker
-     * count well below asyncMaxThreads if so.
+     * Returns false because Playwright objects can only run on their creating
+     * thread. The crawler must use this backend in single-threaded mode.
      */
     boolean function supportsParallel() {
         return false;
     }
 
     /**
-     * Returns the shared page, creating the Playwright instance, a headless
-     * browser, a context, and one page on first use. All are reused for the whole
-     * crawl; each fetch navigates the same page.
+     * getPage
      *
-     * initPlaywright() throws a clear error when the driver is missing or its
-     * version does not match cbPlaywright, which is the "optional dependency not
-     * installed" signal. launchBrowser() is a cbPlaywright mixin helper.
+     * Returns the crawl's page. The first call creates Playwright, a browser,
+     * a context, and the page.
      */
     private any function getPage() {
         if ( structKeyExists( variables, "page" ) ) {
@@ -248,19 +181,11 @@ component
     }
 
     /**
-     * Creates the Playwright driver instance (variables.playwright).
+     * initPlaywright
      *
-     * This replicates the driver setup from cbPlaywright's mixin beforeAll()
-     * WITHOUT its super.beforeAll() call. The mixin swallows the "method not
-     * found" error from that super call by matching Lucee's and Adobe's message
-     * wording; BoxLang's wording is not matched, so the mixin's beforeAll()
-     * rethrows there and the backend cannot start. Until that is fixed upstream,
-     * this method does the same work directly: resolve the driver directory
-     * (CBPLAYWRIGHT_DRIVER_DIR, or the commandbox-cbplaywright default), check
-     * the driver version against cbPlaywright's playwright.version file, point
-     * the playwright.cli.dir system property at the driver, and create the
-     * Playwright instance. Throws when the driver is missing or its version does
-     * not match what cbPlaywright expects.
+     * Creates the Playwright instance without cbPlaywright's lifecycle method.
+     * The lifecycle method fails on BoxLang when its super method is missing.
+     * This method resolves the driver, verifies its version, and starts Playwright.
      */
     private void function initPlaywright() {
         var javaSystem = createObject( "java", "java.lang.System" );
@@ -296,21 +221,12 @@ component
     }
 
     /**
-     * Waits for the page after navigation so JavaScript can finish.
-     * @page A com.microsoft.playwright.Page
+     * applyWaitStrategy
      *
-     * Three stages, each skipped when unconfigured:
-     * 1. Waits for the configured load state (settings.waitStrategy, "load" or
-     *    "networkidle"). The mixin's own waitForLoadState() only supports "load",
-     *    so this calls the Playwright API directly to allow "networkidle".
-     * 2. Waits for settings.waitForSelector to appear, when set. This is the
-     *    targeted alternative to a large blanket waitMs: it returns as soon as the
-     *    known element exists instead of always sleeping. The wait is bounded by
-     *    requestTimeout; if the selector never appears the timeout error is caught,
-     *    logged, and the fetch continues (the page may simply not have it).
-     * 3. Sleeps settings.waitMs, when > 0. Still supported and combinable with the
-     *    selector wait; needed for content injected by a setTimeout with no network
-     *    activity when you cannot name a selector.
+     * Waits for the configured load state, optional selector, and optional fixed
+     * delay. A selector timeout is logged and does not fail the fetch.
+     *
+     * @page Playwright page that finished navigation.
      */
     private void function applyWaitStrategy( required any page ) {
         var loadState = createObject( "java", "com.microsoft.playwright.options.LoadState" )[ uCase( settings.waitStrategy ) ];
@@ -334,10 +250,11 @@ component
     }
 
     /**
-     * Converts a Playwright headers map (java.util.Map<String,String>) to a CF
-     * struct. Iterates entrySet with an isNull guard, the portable pattern the
-     * Jsoup backend uses.
-     * @headerMap A java.util.Map of response headers
+     * toHeaderStruct
+     *
+     * Copies Playwright response headers into a CFML struct.
+     *
+     * @headerMap Java map of response headers.
      */
     private struct function toHeaderStruct( required any headerMap ) {
         var result = {};

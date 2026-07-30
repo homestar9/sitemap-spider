@@ -2,8 +2,7 @@
 param pageTitle = "Untitled Page";
 param canonicalUrl = "";
 param baseHref = request.baseHref;
-// Extra tags a page wants in its <head> (e.g. index.cfm's hreflang links for
-// the task 24 extension tests). Empty for pages that set nothing.
+// Add page-specific tags to <head>. Empty means no extra tags.
 param extraHead = "";
 </cfscript>
 <cfoutput>

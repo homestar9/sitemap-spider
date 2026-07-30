@@ -1,19 +1,20 @@
-﻿component{
+component{
 
-	// Configure ColdBox Application
+	/**
+	 * configure
+	 *
+	 * Defines the test harness ColdBox settings.
+	 */
 	function configure(){
 
-		// coldbox directives
+		// Configure the test application.
 		coldbox = {
-			//Application Setup
 			appName 				= "Module Tester",
 
-			//Development Settings
 			reinitPassword			= "",
 			handlersIndexAutoReload = true,
 			modulesExternalLocation = [],
 
-			//Implicit Events
 			defaultEvent			= "",
 			requestStartHandler		= "",
 			requestEndHandler		= "",
@@ -23,47 +24,37 @@
 			sessionEndHandler		= "",
 			missingTemplateHandler	= "",
 
-			//Error/Exception Handling
 			exceptionHandler		= "",
 			onInvalidEvent			= "",
 			customErrorTemplate 	= "/coldbox/system/exceptions/Whoops.cfm",
 
-			//Application Aspects
 			handlerCaching 			= false,
 			eventCaching			= false
 		};
 
-		// environment settings, create a detectEnvironment() method to detect it yourself.
-		// create a function with the name of the environment so it can be executed if that environment is detected
-		// the value of the environment is a list of regex patterns to match the cgi.http_host.
+		// Treat local hosts as the development environment.
 		environments = {
 			development = "localhost,127\.0\.0\.1"
 		};
 
-		// Module Directives
+		// Load every discovered module.
 		modules = {
-			// An array of modules names to load, empty means all of them
 			include = [],
-			// An array of modules names to NOT load, empty means none
 			exclude = []
 		};
 
-		// Override module settings for the test run. maxCrawlDelay = 0 caps the
-		// robots.txt Crawl-delay to 0 so the integration crawl does not sleep 2s
-		// per page (the sample robots.txt declares Crawl-delay: 2). robots parsing
-		// and the Disallow rule are still exercised; the delay math is unit-tested
-		// in RobotsParserSpec.
+		// Keep robots.txt rules enabled but skip its two-second crawl delay.
+		// RobotsParserSpec tests the delay calculation separately.
 		moduleSettings = {
 			"sitemap-spider" : { maxCrawlDelay : 0 }
 		};
 
-		//Register interceptors as an array, we need order
+		// Register interceptors in execution order.
 		interceptors = [
 		];
 
-		//LogBox DSL
+		// Send test logs to the console and a rolling file.
 		logBox = {
-			// Define Appenders
 			appenders = {
 				myConsole : { class : "ConsoleAppender" },
 				files : {
@@ -73,16 +64,16 @@
 					}
 				}
 			},
-			// Root Logger
 			root = { levelmax="DEBUG", appenders="*" },
-			// Implicit Level Categories
 			info = [ "coldbox.system" ]
 		};
 
 	}
 
 	/**
-	 * Load the Module you are testing
+	 * afterAspectsLoad
+	 *
+	 * Registers and activates the module under test.
 	 */
 	function afterAspectsLoad( event, interceptData, rc, prc ){
 

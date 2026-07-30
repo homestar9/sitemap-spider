@@ -1,44 +1,33 @@
 /**
- * Baseline integration spec for the sitemap-spider module.
- *
- * It crawls the sample site under tests/resources/sample-site and pins the
- * crawler's behavior end to end, so a change that alters what the crawl
- * returns shows up here as a failing spec.
- *
- * Local run recipe:
- *   1. box server start serverConfigFile=server-adobe@2023.json
- *   2. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.ModuleSpec"
- *
- * The runner port (61002) must match the web port in the server-*.json config
- * that is running.
+ * Tests a complete crawl and sitemap result against the sample site.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 	variables.serverRoot = "http#( CGI.HTTPS == "on" ? 's' : '' )#://" & CGI.HTTP_HOST & "/";
 
 	variables.testData = {
-		// Pages the crawl reaches and lists. Keys are relative to appRoot.
-		// "about/" (not "about/index.cfm") because about/index.cfm declares a
-		// canonical URL of "about/", so the page is stored under the canonical.
+		// Pages the crawler must include, relative to appRoot.
+		// about/index.cfm declares about/ as its canonical URL.
 		validPages = [
 			"",
 			"about/",
 			"contact.cfm",
 			"privacy.cfm"
 		],
-		// Pages that must NOT appear in the sitemap.
-		// - nofollow.cfm is linked from index.cfm with rel="nofollow", so the
-		//   parser skips it. This is real v1 behavior.
-		// - disallow.cfm IS linked from index.cfm (task 07) but robots.txt has
-		//   "Disallow: /disallow.cfm", so the crawler skips it and records it in
-		//   ignored with reason "disallowed". See the ignored-reporting spec below.
+		// Pages the crawler must omit.
+		// The index marks nofollow.cfm nofollow.
+		// robots.txt disallows disallow.cfm.
 		ignoredPages = [
 			"disallow.cfm",
 			"nofollow.cfm"
 		]
 	};
 
-	/*********************************** LIFE CYCLE Methods ***********************************/
+	/**
+	 * beforeAll
+	 *
+	 * Loads the module and shared sample-site result.
+	 */
 
 	function beforeAll(){
 		super.beforeAll();
@@ -50,6 +39,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		variables.result = sitemapService.create( variables.appRoot );
 	}
 
+	/**
+	 * afterAll
+	 *
+	 * Restores shared state changed by these specs.
+	 */
 	function afterAll(){
 		// Remove any sitemap file a saveToFile spec wrote.
 		if ( structKeyExists( variables, "savedSitemapFile" )
@@ -66,11 +60,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		super.afterAll();
 	}
 
-	/*********************************** BDD SUITES ***********************************/
-
-	// Turns an ignored list (array of { url, reason }) into a sorted array of
-	// "url|reason" strings, so a sync and a parallel crawl can be compared without
-	// depending on order.
+	/**
+	 * ignoredPairs
+	 *
+	 * Returns sorted URL and reason strings for order-independent comparisons.
+	 */
 	private array function ignoredPairs( required array ignored ){
 		var pairs = [];
 		for ( var entry in arguments.ignored ){
@@ -79,11 +73,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return pairs.sort( "textnocase" );
 	}
 
-	// result.pages is now an array of page structs (each with a url field), not a
-	// struct keyed by URL. These helpers replace the old toHaveKey/structKeyArray
-	// idioms.
-
-	// Every page's url field, for set comparisons.
+	/**
+	 * pageUrls
+	 *
+	 * Returns the URL from each page struct.
+	 */
 	private array function pageUrls( required array pages ){
 		var out = [];
 		for ( var page in arguments.pages ){
@@ -92,8 +86,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return out;
 	}
 
-	// True when some page's url matches (exact). The sample-site URLs compared here
-	// are same-case, so a plain equality check is enough.
+	/**
+	 * hasPage
+	 *
+	 * Returns whether the page array contains an exact, case-sensitive URL.
+	 */
 	private boolean function hasPage( required array pages, required string url ){
 		for ( var page in arguments.pages ){
 			if ( page.url == arguments.url ){
@@ -103,8 +100,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return false;
 	}
 
-	// Returns the page struct whose url matches, or throws when none does (so a
-	// spec that reads a field off it fails loudly).
+	/**
+	 * pageFor
+	 *
+	 * Returns the page for a URL or throws when it is missing.
+	 */
 	private struct function pageFor( required array pages, required string url ){
 		for ( var page in arguments.pages ){
 			if ( page.url == arguments.url ){
@@ -114,13 +114,18 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		throw( type = "TestFailure", message = "No page recorded for #arguments.url#" );
 	}
 
+	/**
+	 * run
+	 *
+	 * Defines the ModuleSpec examples.
+	 */
 	function run(){
 		describe( "Sitemap Tests", function(){
 
 			it( "returns a struct with the expected top-level keys", function(){
 				expect( variables.result ).toBeStruct();
 				expect( variables.result ).toHaveKey( "pages,badUrls,processedUrls,ignored,duration,filePath,saved" );
-				// The disallowedUrls key was removed (task 23); robots blocks live in ignored.
+				// Robots blocks appear in ignored.
 				expect( variables.result ).notToHaveKey( "disallowedUrls" );
 			} );
 
@@ -143,11 +148,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 			it( "reports dropped links in ignored with their reasons", function(){
-				// index.cfm links nofollow.cfm with rel="nofollow" (dropped by the
-				// parser) and disallow.cfm which robots.txt blocks (dropped by the
-				// crawler). Both appear in the ignored list with the right reason.
-				// disallow.cfm is reported only in ignored now (the disallowedUrls
-				// array was removed in task 23).
+				// Parser and robots.txt rejections include their exact reasons.
 				expect( variables.result.ignored ).toBeArray();
 				var reasons = {};
 				for ( var entry in variables.result.ignored ) {
@@ -231,10 +232,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 			it( "does not carry pages over from a previous crawl", function(){
-				// Regression for the Crawler state-reset fix: WireBox may hand back a
-				// cached Crawler, so crawl() resets its state at the top. A first crawl
-				// of the meta-refresh interstitial records redirect-new.cfm; a second,
-				// unrelated crawl must not still contain it.
+				// WireBox can reuse Crawler, so crawl() must clear the first result.
 				var service = getInstance( "sitemapService@sitemap-spider" );
 				service.create( variables.appRoot & "redirect-old.cfm" );
 				var second = service.create( variables.appRoot & "location-old.cfm" );
@@ -309,12 +307,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		describe( "orphan-page seeding", function(){
 
 			it( "crawls an orphan page and its links when passed via seedUrls", function(){
-				// noBaseHref.cfm is not linked from any reachable page, so the
-				// baseline crawl never sees it. Seeding it directly lets the crawl
-				// reach it, and it links to posts.cfm with a base-less relative href.
-				// posts.cfm shows up only if the crawler passes the fetched URL as the
-				// parse base (the task 17 fix) — this is the first end-to-end test of
-				// that path.
+				// Seed the unlinked page. Its relative link requires the fetched URL
+				// as Parser.parseHtml()'s base URI.
 				var result = getInstance( "sitemapService@sitemap-spider" )
 					.create(
 						url      = variables.appRoot,
@@ -386,11 +380,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		describe( "image sitemap via create()", function(){
 
 			it( "records page images and emits <image:image> when includeImages is on", function(){
-				// index.cfm carries an <img src="./assets/img/sample.jpg">. With
-				// includeImages on, that image is collected on the page struct and
-				// the sitemap XML emits an <image:image> entry with the image
-				// namespace. The flag is passed to this one crawl (task 26), so the
-				// module setting stays off and nothing leaks into other specs.
+				// Enable images for this crawl without changing the module setting.
 				var result = getInstance( "sitemapService@sitemap-spider" )
 					.create( url = variables.appRoot, includeImages = true );
 
@@ -514,16 +504,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					.toBe( pageUrls( variables.result.pages ).sort( "textnocase" ) );
 				expect( structKeyArray( async.badUrls ).sort( "textnocase" ) )
 					.toBe( structKeyArray( variables.result.badUrls ).sort( "textnocase" ) );
-				// The ignored list (array of { url, reason }) must match too. Compare
-				// sorted "url|reason" strings so order does not matter. Robots blocks
-				// (reason "disallowed") are part of this, so it also covers what the
-				// removed disallowedUrls comparison used to check.
+				// Compare ignored URLs and reasons without depending on worker order.
 				expect( ignoredPairs( async.ignored ) ).toBe( ignoredPairs( variables.result.ignored ) );
 			} );
 
-			// A race that only sometimes surfaces would make the recorded page set
-			// vary between runs. Crawl a few times and assert every run produces the
-			// same set, so a nondeterministic claim/counter bug fails the suite.
+			// Repeat the parallel crawl to catch race conditions that change pages.
 			it( "produces a stable page set across repeated parallel crawls", function(){
 				var expected = pageUrls( variables.result.pages ).sort( "textnocase" );
 				for ( var i = 1; i <= 3; i++ ){

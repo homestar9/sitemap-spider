@@ -1,57 +1,40 @@
 /**
-********************************************************************************
-Copyright 2005-2007 ColdBox Framework by Luis Majano and Ortus Solutions, Corp
-www.ortussolutions.com
-********************************************************************************
-*/
+ * Runs the browser-based test harness.
+ */
 component{
 
-	// UPDATE THE NAME OF THE MODULE IN TESTING BELOW
+	// Module under test.
 	request.MODULE_NAME = "sitemap-spider";
 
-	// Application properties
+	// Configure the test harness application.
 	this.name              = hash( getCurrentTemplatePath() );
 	this.sessionManagement = true;
 	this.sessionTimeout    = createTimeSpan(0,0,15,0);
     this.setClientCookies  = true;
 
-    /**************************************
-	LUCEE Specific Settings
-	**************************************/
-	// buffer the output of a tag/function body to output in case of a exception
+	// Buffer function output so exceptions can include it.
 	this.bufferOutput 					= true;
-	// Activate Gzip Compression
+	// Disable response compression in the test harness.
 	this.compression 					= false;
-	// Turn on/off white space managemetn
+	// Let Lucee remove unnecessary whitespace.
 	this.whiteSpaceManagement 			= "smart";
-	// Turn on/off remote cfc content whitespace
+	// Keep whitespace in remote component responses.
 	this.suppressRemoteComponentContent = false;
 
-	// COLDBOX STATIC PROPERTY, DO NOT CHANGE UNLESS THIS IS NOT THE ROOT OF YOUR COLDBOX APP
+	// ColdBox uses these values to locate and name the application.
 	COLDBOX_APP_ROOT_PATH       = getDirectoryFromPath( getCurrentTemplatePath() );
-	// The web server mapping to this application. Used for remote purposes or static purposes
 	COLDBOX_APP_MAPPING         = "";
-	// COLDBOX PROPERTIES
 	COLDBOX_CONFIG_FILE 	    = "";
-	// COLDBOX APPLICATION KEY OVERRIDE
 	COLDBOX_APP_KEY 		    = "";
 
-    // Mappings
+	// Map the test harness and module source.
 	this.mappings[ "/root" ] = COLDBOX_APP_ROOT_PATH;
-
-	// Map back to its root
 	moduleRootPath 	= REReplaceNoCase( this.mappings[ "/root" ], "#request.MODULE_NAME#(\\|/)test-harness(\\|/)", "" );
 	modulePath 		= REReplaceNoCase( this.mappings[ "/root" ], "test-harness(\\|/)", "" );
-
-	// Module Root + Path Mappings
 	this.mappings[ "/moduleroot" ] = moduleRootPath;
 	this.mappings[ "/#request.MODULE_NAME#" ] = modulePath;
 
-	// Load the cbPlaywright Java jars (Playwright + its driver bundle) onto the
-	// CF class path so the Playwright browser backend can create a Playwright
-	// instance. Guarded by directoryExists so this is a no-op when cbPlaywright
-	// is not installed (it is an optional, test-only dependency). A real host app
-	// that uses the Playwright backend must load these jars the same way.
+	// Load Playwright only when the optional test dependency is installed.
 	this.cbPlaywrightLib = COLDBOX_APP_ROOT_PATH & "modules/cbPlaywright/lib";
 	if ( directoryExists( this.cbPlaywrightLib ) ) {
 		this.javaSettings = {
@@ -59,12 +42,11 @@ component{
 			loadColdFusionClassPath : true,
 			reloadOnChange : false
 		};
-		// Mapping so the Playwright backend can include cbPlaywright's helper mixin
-		// ("/cbPlaywright/models/PlaywrightMixins.cfm") and read its version file.
+		// Playwright.cfc includes helpers through this mapping.
 		this.mappings[ "/cbPlaywright" ] = COLDBOX_APP_ROOT_PATH & "modules/cbPlaywright";
 	}
 
-	// ORM definitions: ENABLE IF NEEDED
+	// Optional ORM settings for local test applications.
 	//this.datasource = "coolblog";
 	//this.ormEnabled = "true";
 	/**
@@ -81,38 +63,61 @@ component{
 	};
 	**/
 
-	// application start
+	/**
+	 * onApplicationStart
+	 *
+	 * Starts the ColdBox test harness.
+	 */
 	public boolean function onApplicationStart(){
 		application.cbBootstrap = new coldbox.system.Bootstrap( COLDBOX_CONFIG_FILE, COLDBOX_APP_ROOT_PATH, COLDBOX_APP_KEY, COLDBOX_APP_MAPPING );
 		application.cbBootstrap.loadColdbox();
 		return true;
 	}
 
-	// request start
+	/**
+	 * onRequestStart
+	 *
+	 * Passes the current request to ColdBox.
+	 */
 	public boolean function onRequestStart(String targetPage){
 
 		if( url.keyExists( "fwreinit" ) ){
 			if( server.keyExists( "lucee" ) ){
 				pagePoolClear();
 			}
-			// ORM reload: ENABLE IF NEEDED
+			// Reload ORM here when a local test application enables it.
 			// ormReload();
 		}
 
-		// Process ColdBox Request
+		// Pass the request to ColdBox.
 		application.cbBootstrap.onRequestStart( arguments.targetPage );
 
 		return true;
 	}
 
+	/**
+	 * onSessionStart
+	 *
+	 * Registers a new session with ColdBox.
+	 */
 	public void function onSessionStart(){
 		application.cbBootStrap.onSessionStart();
 	}
 
+	/**
+	 * onSessionEnd
+	 *
+	 * Ends a ColdBox session.
+	 */
 	public void function onSessionEnd( struct sessionScope, struct appScope ){
 		arguments.appScope.cbBootStrap.onSessionEnd( argumentCollection=arguments );
 	}
 
+	/**
+	 * onMissingTemplate
+	 *
+	 * Lets ColdBox handle a missing template.
+	 */
 	public boolean function onMissingTemplate( template ){
 		return application.cbBootstrap.onMissingTemplate( argumentCollection=arguments );
 	}

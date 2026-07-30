@@ -1,27 +1,17 @@
 /**
- * Unit specs for Crawler.cfc.
- *
- * Two parts:
- *   1. Regression spec for the task 03 getPriority floor fix.
- *   2. Task 05 behavior specs for crawl() driven by a fake browser, so a full
- *      breadth-first crawl runs with no real HTTP.
- *
- * The URL-allowance rule moved to Parser in task 06 (Crawler now delegates to
- * parser.isUrlAllowed), so its regression coverage lives in ParserSpec.
- *
- * getPriority() is private, exposed here with makePublic(). The fake browser is
- * injected with MockBox $property after onDiComplete has already set
- * variables.browser, so no production change is needed.
- *
- * Local run recipe:
- *   1. box server start serverConfigFile=server-adobe@2023.json
- *   2. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.CrawlerSpec"
+ * Tests crawl order, filtering, metadata, redirects, limits, progress, and
+ * parallel crawling without real HTTP. MockBox replaces the browser with FakeBrowser.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
-	// Base URL of the fake site every crawl() spec starts from.
+	// Every fake crawl starts at this URL.
 	variables.root = "http://example.test/";
 
+	/**
+	 * beforeAll
+	 *
+	 * Loads the shared dependencies and fixtures for these specs.
+	 */
 	function beforeAll(){
 		super.beforeAll();
 		setup();
@@ -31,11 +21,18 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		makePublic( variables.crawler, "getPriority" );
 	}
 
+	/**
+	 * afterAll
+	 *
+	 * Restores shared state changed by these specs.
+	 */
 	function afterAll(){
 		super.afterAll();
 	}
 
 	/**
+	 * buildCrawler
+	 *
 	 * Builds a fresh Crawler wired to a fresh FakeBrowser. crawl() mutates
 	 * instance state, so every scenario needs its own crawler.
 	 *
@@ -61,12 +58,22 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 	// Builds an <a href> tag with an absolute href (relative hrefs would not
 	// resolve, since the Parser parses page html with no base URI).
+	/**
+	 * link
+	 *
+	 * Returns an HTML link for a URL.
+	 */
 	private string function link( required string url ){
 		return '<a href="#arguments.url#">#arguments.url#</a>';
 	}
 
 	// One page carrying an image, an hreflang alternate and a video, so a single
 	// fixture can prove all three extension flags.
+	/**
+	 * extensionHtml
+	 *
+	 * Returns HTML containing every supported sitemap extension.
+	 */
 	private string function extensionHtml(){
 		return '<html><head><title>Extensions</title>'
 			& '<meta name="description" content="A page with everything.">'
@@ -81,6 +88,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	// list, and every page links back to the first url. The first url is therefore
 	// discovered from many pages at once, which stresses the parallel crawler's
 	// atomic claim (it must be recorded exactly once, not once per discovery).
+	/**
+	 * wireGraph
+	 *
+	 * Adds a linked page graph to FakeBrowser.
+	 */
 	private void function wireGraph( required any fake, required array urls ){
 		var body = "";
 		for ( var u in arguments.urls ){
@@ -97,6 +109,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	// structKeyArray idioms.
 
 	// Every page's url field, for set comparisons.
+	/**
+	 * pageUrls
+	 *
+	 * Returns the URL from each page struct.
+	 */
 	private array function pageUrls( required array pages ){
 		var out = [];
 		for ( var page in arguments.pages ){
@@ -108,6 +125,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	// True when some page's url matches exactly. compare() is used (not ==) so the
 	// match is case-sensitive, mirroring the crawl's case-sensitive dedup — /Page
 	// and /page are distinct pages.
+	/**
+	 * hasPage
+	 *
+	 * Returns whether the page array contains a URL.
+	 */
 	private boolean function hasPage( required array pages, required string url ){
 		for ( var page in arguments.pages ){
 			if ( compare( page.url, arguments.url ) == 0 ){
@@ -119,6 +141,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 	// Returns the page struct whose url matches exactly, or an empty struct so a
 	// missing page fails the spec's assertions instead of throwing.
+	/**
+	 * findPage
+	 *
+	 * Returns the page struct for a URL.
+	 */
 	private struct function findPage( required array pages, required string url ){
 		for ( var page in arguments.pages ){
 			if ( compare( page.url, arguments.url ) == 0 ){
@@ -128,6 +155,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return {};
 	}
 
+	/**
+	 * run
+	 *
+	 * Defines the CrawlerSpec examples.
+	 */
 	function run(){
 		describe( "Crawler correctness fixes", function(){
 
@@ -205,9 +237,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
 
-				// The cutoff engaged: exactly maxPages pages were recorded, not all
-				// five (root + four). Task 06 made the bound exact: crawlUrl checks
-				// the page count >= maxPages before appending, so the count is maxPages.
+				// The atomic page limit must stop exactly at maxPages.
 				expect( result.pages.len() ).toBe( 2 );
 			} );
 
@@ -485,18 +515,10 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
-		// Task 16: the normalization policy (Parser.normalizeUrl, folded into
-		// cleanUrl) must produce the same dedup and recorded URLs in both the sync
-		// and parallel crawl paths. Each scenario is asserted for runAsync=false
-		// and runAsync=true. The scenarios are written as explicit pairs rather
-		// than a loop so each it() closure captures its own mode with no
-		// loop-variable-capture hazard.
+		// Synchronous and parallel crawls must normalize URLs the same way.
 		describe( "crawl() URL normalization", function(){
 
-			// Two anchors that differ only in host case normalize to the same URL,
-			// so the page is fetched and recorded exactly once. Registering only the
-			// normalized page means a fetch of any un-normalized variant would throw
-			// FakeBrowser.UnknownUrl and fail the test loudly.
+			// Register only the normalized URL so an incorrect fetch throws.
 			it( "dedups a URL differing only in host case (sync)", function(){
 				var dupUrl = variables.root & "dup.cfm"; // http://example.test/dup.cfm
 
@@ -561,10 +583,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
-		// Task 23: a rejected start/seed URL used to be only logged. Now every seed
-		// rejection is reported in ignored with its reason, so a caller can see why
-		// a seed was skipped. Each case passes a good primary seed (urls[1], which
-		// sets the host and loads robots) plus one bad seed.
+		// A rejected seed must appear in ignored with its reason.
 		describe( "crawl() seed rejection reporting", function(){
 
 			// Collects the ignored array into a { url : reason } struct.
@@ -619,8 +638,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
-		// Task 23: the per-crawl excludePattern argument overrides the module
-		// setting for that crawl only.
+		// The method argument overrides settings.excludePattern for one crawl.
 		describe( "crawl() per-crawl excludePattern argument", function(){
 
 			it( "overrides the module setting for a single crawl", function(){
@@ -666,8 +684,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
-		// Task 24: hreflang alternates and video metadata are collected per page,
-		// each behind its own module setting, and land on the page struct.
+		// Each extension setting controls its matching page data.
 		describe( "crawl() sitemap extension collection", function(){
 
 			it( "records page alternates when includeHreflang is on", function(){
@@ -738,9 +755,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
-		// Task 26: each extension flag can be passed to a single crawl, which
-		// beats the module setting in both directions. Omitting the argument
-		// leaves the setting in charge.
+		// Method arguments override extension settings for one crawl.
 		describe( "crawl() per-crawl extension flag arguments", function(){
 
 			it( "collects images when the argument is true and the setting is off", function(){
@@ -835,9 +850,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
-		// Task 23 regression: pages is an array, not a struct keyed by URL, so two
-		// URLs that differ only in path case stay separate. A struct would have
-		// merged them because CFML struct keys are case-insensitive.
+		// The pages array preserves URL paths that differ only by case.
 		describe( "crawl() records case-variant URLs separately", function(){
 
 			it( "keeps /Page and /page as two pages", function(){
@@ -859,12 +872,15 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 		} );
 
-		// Progress counters and cancellation are driven through the optional
-		// progress argument to crawl(). A no-op default is used when none is passed,
-		// so every other spec above proves behavior is unchanged without it.
+		// crawl() updates and checks the optional CrawlProgress argument.
 		describe( "crawl() progress and cancellation", function(){
 
 			// A fresh CrawlProgress to hand into crawl().
+			/**
+			 * progress
+			 *
+			 * Returns the CrawlProgress supplied to the crawler.
+			 */
 			function progress(){
 				return getInstance( "CrawlProgress@sitemap-spider" );
 			}

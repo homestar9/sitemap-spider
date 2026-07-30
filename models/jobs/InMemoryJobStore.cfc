@@ -4,28 +4,15 @@ component
 	hint      ="Keeps job records in a thread-safe in-memory map. The default IJobStore."
 {
 
-	// How many times a compare-and-swap will retry before giving up. Contention
-	// is only ever a handful of job threads, so this is never reached in
-	// practice; it exists so a pathological race cannot spin forever.
+	// Stop a compare-and-swap loop when another thread keeps changing the record.
 	variables.maxSwapAttempts = 20;
 
 	/**
-	 * Builds the backing map.
+	 * init
 	 *
-	 * A java.util.concurrent.ConcurrentHashMap is used rather than a CFML struct
-	 * because several job threads read and write it at once, and because its
-	 * replace( key, oldValue, newValue ) swaps a record only if nobody changed it
-	 * first. That check-and-swap is what claim() is built on.
-	 *
-	 * Only plain-argument Java methods are used here (get, put, replace, remove).
-	 * The map's compute()/merge() methods would be a shorter way to write the
-	 * same thing, but they take a Java function object, and CFML closures do not
-	 * convert to those reliably on all three supported engines.
-	 *
-	 * This is a singleton, so records live as long as the app does and are shared
-	 * across requests. They do NOT survive a server restart or a ColdBox reinit,
-	 * which builds a fresh singleton. Point the jobStoreDsl setting at a
-	 * database-backed IJobStore when records must outlive the app.
+	 * Creates the thread-safe record map. Records are shared across requests but
+	 * are lost on an application restart. Plain Java map methods are used because
+	 * CFML closures do not convert to Java functions on every supported engine.
 	 */
 	function init(){
 		variables.jobs = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
@@ -33,28 +20,19 @@ component
 	}
 
 	/**
-	 * Always false: these records live in one app server's memory, so no other
-	 * server can see them.
+	 * isShared
 	 *
-	 * That answer switches off the heartbeat and dead-job timers, which is
-	 * correct here rather than merely cheap. A heartbeat only exists so another
-	 * server can watch a job, and getJob() reads this server's own counters
-	 * live from memory instead. The dead-job check could never find anything
-	 * either: a record only goes stale when the heartbeat task stops, and that
-	 * task shares an executor with the dead-job task, so both stop together.
+	 * Returns false because only this app server can read the records.
 	 */
 	boolean function isShared(){
 		return false;
 	}
 
 	/**
-	 * Inserts or replaces the record for a job id.
+	 * save
 	 *
-	 * With expectedOwnerId passed, the record is only written if the stored one
-	 * still carries that ownerId, and the check plus the write happen as one
-	 * step. That is what stops a late write from an old crawl thread (one that
-	 * outlived a ColdBox reinit) from overwriting a job another worker has since
-	 * re-claimed.
+	 * Inserts or replaces a record. expectedOwnerId makes the write conditional
+	 * so an old crawl cannot overwrite a job that another worker re-claimed.
 	 *
 	 * @jobId           The job's unique id.
 	 * @record          The job record struct.
@@ -77,9 +55,7 @@ component
 			if ( isNull( stored ) || stored.ownerId != arguments.expectedOwnerId ) {
 				return false;
 			}
-			// Swaps only when the stored record is still the one just read, so a
-			// claim that lands in between makes this fail and re-check instead of
-			// overwriting it.
+			// Replace only the exact record that was just checked.
 			if ( variables.jobs.replace( arguments.jobId, stored, arguments.record ) ) {
 				return true;
 			}
@@ -88,12 +64,10 @@ component
 	}
 
 	/**
-	 * Returns a copy of the record for a job id, or an empty struct when absent.
+	 * get
 	 *
-	 * A copy, not the stored struct itself: CFML structs are handed around by
-	 * reference, so returning the real one would let a caller change stored state
-	 * just by editing what it read. That would also defeat the ownerId check in
-	 * save(), which compares against what is actually in the map.
+	 * Returns a copy of a record, or an empty struct. The copy prevents callers
+	 * from changing stored state by reference.
 	 *
 	 * @jobId The job's unique id.
 	 */
@@ -103,12 +77,10 @@ component
 	}
 
 	/**
-	 * Returns copies of the records matching the filter, or of all of them when
-	 * the filter is empty. Order is not guaranteed; the caller sorts.
+	 * list
 	 *
-	 * "status" matches the record's status, and accepts either one status or an
-	 * array of acceptable ones. Any other key is matched against the record's meta
-	 * struct, so a host can ask for one customer's or one site's jobs.
+	 * Returns copies of matching records. status accepts one value or an array.
+	 * Other filter keys match record.meta. Order is not guaranteed.
 	 *
 	 * @filter Optional keys the record must match. Empty returns every job.
 	 */
@@ -125,7 +97,9 @@ component
 	}
 
 	/**
-	 * Reports whether a record satisfies every key in the filter.
+	 * matchesFilter
+	 *
+	 * Returns whether a record matches every filter value.
 	 *
 	 * @record The job record to test.
 	 * @filter The filter struct; empty matches everything.
@@ -135,7 +109,7 @@ component
 			var wanted = arguments.filter[ key ];
 
 			if ( key == "status" ) {
-				// A string matches one status; an array matches any of several.
+				// Match one status or any status in an array.
 				var matched = isArray( wanted )
 				 ? wanted.findNoCase( arguments.record.status ) > 0
 				 : arguments.record.status == wanted;
@@ -145,7 +119,7 @@ component
 				continue;
 			}
 
-			// Every other key is a lookup into the host's opaque meta struct.
+			// Match other filter values against the host's meta struct.
 			if ( !arguments.record.keyExists( "meta" ) || !isStruct( arguments.record.meta ) ) {
 				return false;
 			}
@@ -157,7 +131,9 @@ component
 	}
 
 	/**
-	 * Removes a job record. Does nothing when the id is not there.
+	 * remove
+	 *
+	 * Removes a job record when it exists.
 	 *
 	 * @jobId The job's unique id.
 	 */
@@ -166,12 +142,9 @@ component
 	}
 
 	/**
-	 * Claims a queued job for one worker.
+	 * claim
 	 *
-	 * Reads the record, builds a changed copy, then swaps the copy in only if
-	 * nobody else changed the record first. Two workers racing for the same job
-	 * both read status "queued", but only one swap succeeds; the loser re-reads,
-	 * sees "running", and returns false. So exactly one caller ever gets true.
+	 * Atomically changes a queued job to running for one worker.
 	 *
 	 * @jobId   The job to claim.
 	 * @ownerId Identifies the claiming worker (app server plus boot).
@@ -192,8 +165,7 @@ component
 				return false;
 			}
 
-			// Change a copy, never the stored struct: editing in place would
-			// apply the claim before the swap decided whether it was allowed.
+			// Change a copy so the stored record remains unchanged until replace succeeds.
 			var claimed         = duplicate( stored );
 			claimed.status      = "running";
 			claimed.ownerId     = arguments.ownerId;
@@ -211,11 +183,10 @@ component
 	}
 
 	/**
-	 * Marks a running job as still alive and stores its latest counters.
+	 * heartbeat
 	 *
-	 * Best effort: if the record changes while this is running, the update is
-	 * dropped rather than retried, because another heartbeat follows shortly and
-	 * a missed one changes nothing.
+	 * Saves the latest progress and heartbeat. A failed replacement is not retried
+	 * because another heartbeat will run soon.
 	 *
 	 * @jobId    The running job.
 	 * @progress A CrawlProgress snapshot struct.
@@ -232,8 +203,9 @@ component
 	}
 
 	/**
-	 * Returns running jobs whose heartbeat is older than staleSeconds, meaning
-	 * whatever was running them died without cleaning up.
+	 * findStale
+	 *
+	 * Returns running jobs whose heartbeat is older than staleSeconds.
 	 *
 	 * @staleSeconds How old a heartbeat must be before the job counts as dead.
 	 */
@@ -255,12 +227,9 @@ component
 	}
 
 	/**
-	 * Always returns an empty array.
+	 * findOrphaned
 	 *
-	 * Orphan detection looks for running jobs left behind by an earlier boot of
-	 * this app server. This store keeps records in memory, so they went away with
-	 * the boot that created them and there is nothing left to find. A
-	 * database-backed store is where this method does real work.
+	 * Returns an empty array because old records disappear with this in-memory store.
 	 *
 	 * @nodeId        This app server's id.
 	 * @currentBootId The id of the boot happening now.

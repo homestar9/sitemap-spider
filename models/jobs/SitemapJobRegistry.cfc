@@ -1,11 +1,7 @@
 component
 	singleton
-	// threadsafe stops WireBox putting this object in its singleton cache before
-	// onDiComplete() has run. Without it, a background task calling getInstance()
-	// while another thread is still wiring this one gets a copy that has no store
-	// and no progressMap yet, and every method below blows up. Nothing injects
-	// this component into anything else, so no circular dependency needs the
-	// early publish that dropping this attribute would restore.
+	// Wait until onDiComplete() finishes before WireBox publishes this singleton.
+	// A scheduled task must not receive an instance without its store or counters.
 	threadsafe
 	accessors=true
 	hint     ="Runs sitemap crawls as background jobs and tracks their progress"
@@ -18,7 +14,7 @@ component
 	property name="logger"             inject="logbox:logger:{this}";
 	property name="wirebox"            inject="Wirebox";
 
-	// Statuses a job can no longer move out of.
+	// Jobs cannot leave these final statuses.
 	variables.terminalStatuses = [
 		"completed",
 		"failed",
@@ -27,26 +23,19 @@ component
 	];
 
 	/**
-	 * Initializes the registry. The real setup is in onDiComplete, which runs
-	 * after WireBox has filled in the properties above.
+	 * init
+	 *
+	 * Returns the registry before injected dependencies are available.
 	 */
 	function init(){
 		return this;
 	}
 
 	/**
-	 * Wires up the parts that need injected dependencies.
+	 * onDiComplete
 	 *
-	 * - store: the IJobStore named by the jobStoreDsl setting, so a host can swap
-	 *   the in-memory default for one backed by a database.
-	 * - executor: a fixed pool sized to maxConcurrentJobs. A fixed pool runs that
-	 *   many jobs at once and holds the rest in its own queue, starting them as
-	 *   slots free up, which is exactly the behavior wanted here.
-	 * - progressMap: the live CrawlProgress for each running job, kept in memory
-	 *   so per-page counting never touches the store.
-	 * - nodeId / bootId: which app server this is, and which start of it. Both go
-	 *   on a job when it is claimed. bootId is what lets the app spot jobs left
-	 *   "running" by its own previous start: those threads are gone for certain.
+	 * Loads the job store, creates the fixed job pool and live progress map, and
+	 * assigns IDs for this server and application start.
 	 */
 	function onDiComplete(){
 		variables.store    = wirebox.getInstance( settings.jobStoreDsl );
@@ -63,67 +52,56 @@ component
 	}
 
 	/**
-	 * True once onDiComplete() has run and the store and counters exist.
+	 * isReady
 	 *
-	 * The background methods below check this before doing anything. A scheduled
-	 * task can fire while WireBox is still building this singleton — right after
-	 * a framework reinit, for example — and skipping that tick is the right
-	 * answer, because the next one runs against a finished object. Throwing
-	 * instead would put a stacktrace in the host's log for something that fixes
-	 * itself in seconds.
-	 *
-	 * The threadsafe attribute on this component should stop that from happening
-	 * at all. This is the second line of defence, and it matters because the
-	 * scheduler asks usesSharedStore() from a .when() constraint, where ColdBox
-	 * does not catch errors — see config/Scheduler.cfc.
+	 * Returns whether onDiComplete() created the store and progress map. Scheduled
+	 * tasks skip a run while WireBox rebuilds this singleton.
 	 */
 	private boolean function isReady(){
 		return variables.keyExists( "store" ) && variables.keyExists( "progressMap" );
 	}
 
 	/**
-	 * True when the job store is shared between app servers.
+	 * usesSharedStore
 	 *
-	 * The scheduler asks before each run of the heartbeat and dead-job tasks,
-	 * because neither does anything useful for a single server. See
-	 * IJobStore.isShared() for what the answer switches on and off.
-	 *
-	 * Returns false while this object is still being wired, so a task firing
-	 * mid-reinit skips its turn rather than throwing.
+	 * Returns whether several app servers share the job store. Returns false
+	 * before dependency injection finishes.
 	 */
 	boolean function usesSharedStore(){
 		return isReady() && variables.store.isShared();
 	}
 
 	/**
-	 * Returns the name this app server goes by in job records: the jobNodeId
-	 * setting, or the machine's host name when that is empty.
+	 * getNodeId
+	 *
+	 * Returns this app server's job record ID.
 	 */
 	string function getNodeId(){
 		return variables.nodeId;
 	}
 
 	/**
-	 * Returns the id for this start of the app. A job record carrying a different
-	 * one is left over from a previous start, which is how the startup sweep spots
-	 * jobs whose threads are gone.
+	 * getBootId
+	 *
+	 * Returns the ID for this application start.
 	 */
 	string function getBootId(){
 		return variables.bootId;
 	}
 
 	/**
-	 * Returns the id that marks jobs as belonging to this app server and this
-	 * start of it. Useful to a host showing which server is running a job.
+	 * getOwnerId
+	 *
+	 * Returns the combined node and boot ID used to own claimed jobs.
 	 */
 	string function getOwnerId(){
 		return variables.ownerId;
 	}
 
 	/**
-	 * Returns this machine's host name, used to name the app server when the
-	 * jobNodeId setting is empty. Falls back to "unknown-host" when the lookup
-	 * fails, which only affects how job records are labelled.
+	 * resolveHostName
+	 *
+	 * Returns the machine host name, or "unknown-host" when lookup fails.
 	 */
 	private string function resolveHostName(){
 		try {
@@ -134,40 +112,26 @@ component
 	}
 
 	/**
-	 * Queues a crawl to run in the background and returns its job id right away.
+	 * queue
 	 *
-	 * The crawl runs on the job thread pool. When every slot is busy the job waits
-	 * as "queued" and starts as soon as one frees up.
+	 * Saves and queues a background crawl, then returns its job ID. filePath is
+	 * required because the job has no HTTP response where it can return XML.
 	 *
-	 * filePath is required because a background job has no response to write to,
-	 * so it has to save the file for the host to serve or upload later. An empty
-	 * one throws sitemap-spider.FilePathRequired.
-	 *
-	 * runAsync is off by default: the job already has its own pool thread, and
-	 * turning it on multiplies threads (maxConcurrentJobs times asyncMaxThreads at
-	 * worst). browserDsl picks the backend for this one job, which matters because
-	 * each Playwright job runs its own browser process. meta is the host's own
-	 * bookkeeping (site id, customer id) — stored as-is, handed back on every read,
-	 * usable as a filter in listJobs(), and never read by this module.
-	 *
-	 * @url            The start URL (string) or array of URLs, as SitemapService.create takes.
-	 * @filePath       Required. Where to write the finished sitemap.
-	 * @seedUrls       Extra start URLs for pages nothing links to.
-	 * @excludeUrls    Exact URLs to skip.
-	 * @excludePattern Section-exclude regex for this crawl.
-	 * @publicBaseUrl  Absolute URL prefix used in a split sitemap's index entries.
-	 * @runAsync       When true, this one crawl fetches on several threads.
-	 * @browserDsl     Browser backend for this job. Empty uses the module setting.
-	 * @includeImages  Image sitemap extension for this job. Omit to use the setting.
-	 * @includeHreflang hreflang extension for this job. Omit to use the setting.
-	 * @includeVideos  Video extension for this job. Omit to use the setting.
-	 * @writeMetadata  Write the JSON metadata sidecar after the sitemap. Omit to
-	 *   use the setting. See SitemapService.create.
-	 * @metadataPath   Where to write the sidecar. Omit to use the module setting;
-	 *   pass an explicit empty string to derive it from filePath.
-	 * @metadataIncludeUrls Carry the full badUrls/ignored lists in the sidecar.
-	 *   Omit to use the setting.
-	 * @meta           The host's own values to store with the job.
+	 * @url Starting URL or URL array.
+	 * @filePath Full path for the saved sitemap.
+	 * @seedUrls Extra starting URLs.
+	 * @excludeUrls Exact URLs to skip.
+	 * @excludePattern Regex for skipped URL sections.
+	 * @publicBaseUrl URL prefix used in a split sitemap index.
+	 * @runAsync Enables parallel workers inside this job.
+	 * @browserDsl Browser backend for this job.
+	 * @includeImages Enables image entries.
+	 * @includeHreflang Enables hreflang entries.
+	 * @includeVideos Enables video entries.
+	 * @writeMetadata Saves a JSON metadata file.
+	 * @metadataPath Full metadata path. Empty derives it from filePath.
+	 * @metadataIncludeUrls Adds badUrls and ignored to metadata.
+	 * @meta Host-owned values saved with the job.
 	 *
 	 * @return The new job's id.
 	 */
@@ -188,17 +152,12 @@ component
 		boolean metadataIncludeUrls,
 		struct meta           = {}
 	){
-		// The extension and metadata flags are resolved here rather than left
-		// null, because they are written onto the job record and a store cannot
-		// save a null. Resolving at queue time also means the job runs with the
-		// settings the caller queued it under, even if a setting changes before
-		// its turn.
+		// Save concrete option values so later setting changes do not affect this job.
 		param name="arguments.includeImages" default="#settings.includeImages#";
 		param name="arguments.includeHreflang" default="#settings.includeHreflang#";
 		param name="arguments.includeVideos" default="#settings.includeVideos#";
 		param name="arguments.writeMetadata" default="#settings.writeMetadata#";
-		// param preserves an explicitly passed empty string, which is the
-		// per-job escape hatch back to adjacent-file derivation.
+		// Preserve an explicit empty path so it still means "beside the sitemap."
 		param name="arguments.metadataPath" default="#settings.metadataPath#";
 		param name="arguments.metadataIncludeUrls" default="#settings.metadataIncludeUrls#";
 
@@ -211,13 +170,10 @@ component
 
 		var jobId = createUUID();
 
-		// The live counters for this job, held in memory so getJob can read them
-		// while the crawl runs.
+		// Keep live counters in memory while the job runs.
 		variables.progressMap.put( jobId, wirebox.getInstance( "CrawlProgress@sitemap-spider" ) );
 
-		// Everything create() needs is kept on the record, so the pool thread can
-		// rebuild the call from the job id alone. It must not read anything from
-		// the request that queued it, because that request is long gone by then.
+		// Save every create() argument because the original request ends before the job.
 		var record = {
 			"id"             : jobId,
 			"status"         : "queued",
@@ -247,15 +203,13 @@ component
 			"progress"       : {},
 			"result"         : {},
 			"error"          : "",
-			// Reserved so a future version could restart a crawl where it stopped
-			// instead of from the beginning. Nothing writes it today.
+			// This key is currently always empty.
 			"checkpoint"     : ""
 		};
 		variables.store.save( jobId, record );
 		announceJobEvent( "onSitemapJobQueued", jobId, record );
 
-		// Hand the crawl to the pool. The closure deliberately captures only the
-		// job id string; the thread looks everything else up from the store.
+		// Capture only jobId. The worker reads all other values from the store.
 		variables.executor.submit( function(){
 			runJob( jobId );
 		} );
@@ -264,13 +218,9 @@ component
 	}
 
 	/**
-	 * Runs one queued job on a pool thread.
+	 * runJob
 	 *
-	 * Claims the job first. claim() only succeeds for one caller, so a job is
-	 * never run twice even if another app server is watching the same store. From
-	 * there: crawl, then write down how it ended. A failure is written to the
-	 * record rather than only logged, because a job nobody marks as finished would
-	 * sit on "running" forever.
+	 * Claims and runs one queued job, then saves its final status and result.
 	 *
 	 * @jobId The job to run.
 	 */
@@ -309,9 +259,7 @@ component
 				publicBaseUrl   = record.publicBaseUrl,
 				runAsync        = record.runAsync,
 				browserDsl      = record.browserDsl,
-				// The keys are checked rather than read straight, because a
-				// record queued by an older version, or already sitting in a
-				// persistent store before an upgrade, will not have them.
+				// Older durable records may not contain newer option keys.
 				includeImages   = recordFlag( record, "includeImages" ),
 				includeHreflang = recordFlag( record, "includeHreflang" ),
 				includeVideos   = recordFlag( record, "includeVideos" ),
@@ -321,7 +269,7 @@ component
 				progress        = progress
 			);
 
-			// A crawl stopped part way through is canceled, not completed.
+			// A canceled crawl is not completed.
 			var finalStatus = progress.isCanceled() ? "canceled" : "completed";
 			record.status   = finalStatus;
 			progress.setStatus( finalStatus );
@@ -346,12 +294,7 @@ component
 			record.endedAt  = now();
 			record.progress = progress.snapshot();
 
-			// Only write if this job is still ours. After a framework reinit an
-			// older crawl thread can still be running while the stale-job check has
-			// already marked that job interrupted and something else re-claimed it.
-			// Matching on ownerId drops that late write instead of undoing the
-			// newer state. When nobody re-claimed it, the write goes through and the
-			// real result is recorded.
+			// ownerId prevents an old crawl from overwriting a re-claimed job.
 			var applied = variables.store.save( arguments.jobId, record, variables.ownerId );
 			variables.progressMap.remove( arguments.jobId );
 			if ( applied ) {
@@ -362,12 +305,9 @@ component
 	}
 
 	/**
-	 * Reads one of the boolean job flags off a job record, falling back to the
-	 * same-named module setting when the record has no such key.
+	 * recordFlag
 	 *
-	 * queue() always writes all of them, so the fallback is only for records
-	 * that predate a flag: ones queued by an older version of this module, or
-	 * ones a persistent store was already holding when the host upgraded.
+	 * Returns a saved boolean option or its module default for an older record.
 	 *
 	 * @record The job record.
 	 * @key    One of includeImages, includeHreflang, includeVideos,
@@ -380,11 +320,10 @@ component
 	}
 
 	/**
-	 * Reads the snapshotted metadata path from a job record, falling back to the
-	 * module setting only for a legacy record that predates the key.
+	 * recordMetadataPath
 	 *
-	 * An existing empty value is returned unchanged because it deliberately means
-	 * "derive the sidecar path from filePath", even if the setting later changes.
+	 * Returns a job's metadata path or the module default for an older record.
+	 * An existing empty value still means "derive from filePath."
 	 *
 	 * @record The persisted job record.
 	 */
@@ -395,15 +334,9 @@ component
 	}
 
 	/**
-	 * Writes the current counters of every running job to the store.
+	 * heartbeatRunningJobs
 	 *
-	 * Called on a timer by the module's scheduler. Two things depend on it: a
-	 * dashboard can show progress for a job running on another server or one whose
-	 * app has since restarted, and findStale() reads the timestamp it writes to
-	 * notice jobs whose process died.
-	 *
-	 * Only jobs running on this server are in progressMap, so this only ever
-	 * reports on its own work.
+	 * Saves progress and a heartbeat for jobs running on this server.
 	 *
 	 * @return How many jobs were reported on. 0 when this object is not wired yet.
 	 */
@@ -427,12 +360,9 @@ component
 	}
 
 	/**
-	 * Marks jobs whose process died as interrupted.
+	 * reapStaleJobs
 	 *
-	 * Finds running jobs whose last heartbeat is older than jobStaleSeconds. That
-	 * only happens when whatever was running them went away without cleaning up: a
-	 * killed server, an out-of-memory, a stopped container. Nothing runs in those
-	 * cases, so this check is the only way those jobs ever stop looking active.
+	 * Marks jobs interrupted when their heartbeat is older than jobStaleSeconds.
 	 *
 	 * @return How many jobs were marked interrupted. 0 when this object is not
 	 *   wired yet.
@@ -452,15 +382,10 @@ component
 	}
 
 	/**
-	 * Marks jobs left "running" by an earlier start of this same app server.
+	 * sweepOrphanedJobs
 	 *
-	 * Those jobs are dead for certain, because their threads went away with the
-	 * previous start. Matching on the boot id means they can be cleaned up the
-	 * moment the app comes back rather than waiting for their heartbeats to age
-	 * out. Run once at startup.
-	 *
-	 * With the in-memory store this finds nothing, because the records went away
-	 * with the restart too.
+	 * Marks running jobs from an earlier boot of this node interrupted. Their
+	 * crawl threads ended when that application stopped.
 	 *
 	 * @return How many jobs were marked interrupted. 0 when this object is not
 	 *   wired yet.
@@ -480,10 +405,9 @@ component
 	}
 
 	/**
-	 * Moves one job to interrupted and tells the host about it.
+	 * markInterrupted
 	 *
-	 * The write is conditional on the job still belonging to whoever last claimed
-	 * it, so two servers both noticing the same dead job cannot both mark it.
+	 * Conditionally marks a claimed job interrupted and announces the change.
 	 *
 	 * @record The job record to end.
 	 * @reason Why it is being ended; stored on the record for the host to show.
@@ -507,10 +431,9 @@ component
 	}
 
 	/**
-	 * Returns one job's current state: its stored record plus a "progress" key.
+	 * getJob
 	 *
-	 * For a job running here the progress is live. For one running elsewhere, or
-	 * one that has finished, it is the last set of counters written to the store.
+	 * Returns a job record with live or last-saved progress.
 	 *
 	 * @jobId The job to read. Returns an empty struct when there is no such job.
 	 */
@@ -523,11 +446,9 @@ component
 	}
 
 	/**
-	 * Returns jobs as record-plus-progress structs, newest first.
+	 * listJobs
 	 *
-	 * "status" in the filter narrows by status, and takes either one status or an
-	 * array of them. Any other key is matched against the job's meta struct, so a
-	 * host can ask for one customer's or one site's jobs.
+	 * Returns matching jobs with progress, newest first.
 	 *
 	 * @filter Optional keys the job must match. Empty returns every job.
 	 */
@@ -543,8 +464,9 @@ component
 	}
 
 	/**
-	 * Adds a "progress" key to a record: the live counters when the job is running
-	 * on this server, otherwise the last ones written to the store.
+	 * withProgress
+	 *
+	 * Adds live progress when available, otherwise the last saved progress.
 	 *
 	 * @record The stored job record.
 	 */
@@ -556,11 +478,9 @@ component
 	}
 
 	/**
-	 * Asks a job to stop.
+	 * cancel
 	 *
-	 * A job still waiting in the queue is skipped when its turn comes. A running
-	 * one stops after the page it is on finishes, so with the Playwright backend
-	 * this can take a few seconds. The job's own thread writes the final status.
+	 * Requests cancellation. A running job stops after its current page finishes.
 	 *
 	 * @jobId The job to cancel.
 	 *
@@ -577,9 +497,7 @@ component
 			progress.cancel();
 		}
 
-		// Marking a queued job right away means it shows as canceled immediately
-		// and runJob's claim will refuse to start it. A running job's own thread
-		// confirms the final status when it stops.
+		// Cancel a queued job now so runJob() cannot claim it later.
 		if ( !arrayContains( variables.terminalStatuses, record.status ) && record.status == "queued" ) {
 			record.status  = "canceled";
 			record.endedAt = now();
@@ -589,8 +507,9 @@ component
 	}
 
 	/**
-	 * Removes a job's record and its live counters. Use after downloading the
-	 * file, or to clear a finished job out of a list.
+	 * remove
+	 *
+	 * Removes a job record and its live progress.
 	 *
 	 * @jobId The job to remove.
 	 */
@@ -600,24 +519,12 @@ component
 	}
 
 	/**
-	 * Stops all background jobs, for a framework reinit or app shutdown.
+	 * shutdown
 	 *
-	 * Cancels every job running here and records it as interrupted. A reinit
-	 * replaces every singleton, so without this the crawls would keep going with
-	 * nothing tracking them and their jobs would read "running" forever.
-	 *
-	 * It does not stop the thread pool. ColdBox owns that pool (it is registered
-	 * with the async manager as "sitemap-jobs") and stops it as part of the same
-	 * reinit, right after this runs. Writing the job records is the part only this
-	 * method can do.
-	 *
-	 * It only cancels; it never closes a crawl's browser itself. A Playwright
-	 * browser can only be driven from the thread that created it, so reaching in
-	 * from here could hang. The crawl's own thread notices the cancel and closes
-	 * its browser as it finishes, which is both safe and enough.
-	 *
-	 * Nothing in here is allowed to throw: ModuleConfig.onUnload() calls it, and an
-	 * error escaping that would make ColdBox tear down the whole application.
+	 * Cancels this server's jobs and records them as interrupted during shutdown.
+	 * ColdBox stops the job pool. Each crawl thread closes its own browser because
+	 * Playwright resources must be closed by their creating thread. This method
+	 * must not throw because ModuleConfig.onUnload() calls it.
 	 *
 	 * @return How many running jobs were marked interrupted. 0 when this object
 	 *   is not wired yet, in which case it never queued anything either.
@@ -630,7 +537,7 @@ component
 		var count = 0;
 
 		try {
-			// Ask every crawl running here to stop at its next page.
+			// Ask every local crawl to stop after its current page.
 			var iterator = variables.progressMap.entrySet().iterator();
 			while ( iterator.hasNext() ) {
 				var entry = iterator.next();
@@ -641,9 +548,7 @@ component
 				}
 			}
 
-			// Write them down as interrupted while the store is still reachable.
-			// This is the part that matters: the crawl threads may outlive this
-			// call, but the records are what a host reads afterwards.
+			// Save interrupted statuses while the store is still available.
 			var running = variables.store.list( { "status" : "running" } );
 			for ( var record in running ) {
 				try {
@@ -665,13 +570,9 @@ component
 	}
 
 	/**
-	 * Tells the host app that a job changed state, if it is listening.
+	 * announceJobEvent
 	 *
-	 * This is how a host does its own work — uploading the file over FTP or SSH,
-	 * emailing someone, counting usage — without this module knowing about any of
-	 * it. Announcing an event nobody listens for does nothing, so apps that only
-	 * call SitemapService directly are unaffected. A listener that throws must not
-	 * take the job down with it, so errors are caught and logged.
+	 * Announces a job state change. Listener errors are logged and cannot fail the job.
 	 *
 	 * @event  Which point to announce; see interceptorSettings in ModuleConfig.
 	 * @jobId  The job the event is about.
@@ -693,9 +594,9 @@ component
 	}
 
 	/**
-	 * Drops the oldest finished jobs once there are more than maxRetainedJobs of
-	 * them, so a long-running host does not keep every job it has ever run. Only
-	 * finished jobs are dropped; queued and running ones are left alone.
+	 * enforceRetention
+	 *
+	 * Removes the oldest final job records above maxRetainedJobs.
 	 */
 	private void function enforceRetention(){
 		var cap = settings.maxRetainedJobs;

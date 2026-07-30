@@ -1,17 +1,13 @@
 /**
- * Unit specs for SitemapGenerator.cfc.
- *
- * Covers generate() output shape and escaping, and the saveToFile() round-trip.
- * The generator has no injected dependencies, so no mocking is needed. pages is
- * an array of page structs (each { url, lastModified, priority[, images] }), built
- * with the page() helper below.
- *
- * Local run recipe:
- *   1. box server start serverConfigFile=server-adobe@2023.json
- *   2. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.SitemapGeneratorSpec"
+ * Tests sitemap XML generation, escaping, extensions, splitting, and file output.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
+	/**
+	 * beforeAll
+	 *
+	 * Loads the shared dependencies and fixtures for these specs.
+	 */
 	function beforeAll(){
 		super.beforeAll();
 		setup();
@@ -21,6 +17,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		variables.tempDir   = "";
 	}
 
+	/**
+	 * afterAll
+	 *
+	 * Restores shared state changed by these specs.
+	 */
 	function afterAll(){
 		// Remove the file saveToFile() wrote, if the test left one behind.
 		if ( len( variables.tempFile ) && fileExists( variables.tempFile ) ) {
@@ -33,9 +34,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		super.afterAll();
 	}
 
-	// Builds one page struct in the array shape generate()/generateSet() take. The
-	// images/alternates/videos keys are added only when passed, so a page without
-	// them stays extension-free (the generator guards on each key).
+	/**
+	 * page
+	 *
+	 * Builds a page and adds only the requested extension data.
+	 */
 	private struct function page(
 		required string url,
 		required numeric priority,
@@ -57,6 +60,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		return p;
 	}
 
+	/**
+	 * run
+	 *
+	 * Defines the SitemapGeneratorSpec examples.
+	 */
 	function run(){
 		describe( "SitemapGenerator", function(){
 
@@ -84,9 +92,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 					var xml = variables.generator.generate( pages );
 
-					// The raw string carries the escaped entity...
+					// The XML must contain an escaped ampersand.
 					expect( xml ).toInclude( "&amp;" );
-					// ...and it parses back to the original URL (would throw if unescaped).
+					// xmlParse() would fail if the ampersand were not escaped.
 					var doc = xmlParse( xml );
 					// Children of <url> are <loc> then <priority> (no lastmod here).
 					var loc = doc.xmlRoot.xmlChildren[ 1 ].xmlChildren[ 1 ];

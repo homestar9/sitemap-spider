@@ -1,42 +1,32 @@
-﻿/**
-* Copyright 2005-2007 ColdBox Framework by Luis Majano and Ortus Solutions, Corp
-* www.ortussolutions.com
-* ---
-*/
+/**
+ * Runs TestBox specs in a ColdBox virtual application.
+ */
 component{
 
-	// The name of the module used in cfmappings ,etc
+	// Identify the module and its source directory.
 	request.MODULE_NAME = "sitemap-spider";
-	// The directory name of the module on disk. Usually, it's the same as the module name
 	request.MODULE_PATH = "sitemap-spider";
 
-	// APPLICATION CFC PROPERTIES
+	// Configure the TestBox application.
 	this.name 				= "#request.MODULE_NAME# Testing Suite";
 	this.sessionManagement 	= true;
 	this.sessionTimeout 	= createTimeSpan( 0, 0, 15, 0 );
 	this.applicationTimeout = createTimeSpan( 0, 0, 15, 0 );
 	this.setClientCookies 	= true;
-	// Turn on/off white space management
+	// Let the engine remove unnecessary whitespace.
 	this.whiteSpaceManagement = "smart";
     this.enableNullSupport = shouldEnableFullNullSupport();
 
-	// Create testing mapping
+	// Map the tests, application, and module source.
 	this.mappings[ "/tests" ] = getDirectoryFromPath( getCurrentTemplatePath() );
-
-	// The application root
 	rootPath = REReplaceNoCase( this.mappings[ "/tests" ], "tests(\\|/)", "" );
 	this.mappings[ "/root" ]   			= rootPath;
-
-	// The module root path
 	moduleRootPath = REReplaceNoCase( rootPath, "#request.MODULE_PATH#(\\|/)test-harness(\\|/)", "" );
 	this.mappings[ "/moduleroot" ] 				= moduleRootPath;
 	this.mappings[ "/#request.MODULE_NAME#" ] 	= moduleRootPath & "#request.MODULE_PATH#";
 
-	// Load the cbPlaywright Java jars (Playwright + its driver bundle) onto the
-	// CF class path so PlaywrightSpec can create a Playwright instance. The tests
-	// run under this Application, so the jars must be loaded here (not only in the
-	// web-root Application.cfc). Guarded by directoryExists so this is a no-op when
-	// cbPlaywright is not installed (it is an optional, test-only dependency).
+	// Load Playwright only when the optional test dependency is installed.
+	// Specs run in this application, so its classpath must contain the jars.
 	this.cbPlaywrightLib = rootPath & "modules/cbPlaywright/lib";
 	if ( directoryExists( this.cbPlaywrightLib ) ) {
 		this.javaSettings = {
@@ -44,13 +34,11 @@ component{
 			loadColdFusionClassPath : true,
 			reloadOnChange : false
 		};
-		// Mapping so the Playwright backend can include cbPlaywright's helper mixin
-		// ("/cbPlaywright/models/PlaywrightMixins.cfm") and read its version file.
+		// Playwright.cfc includes helpers through this mapping.
 		this.mappings[ "/cbPlaywright" ] = rootPath & "modules/cbPlaywright";
 	}
 
-	// ORM Definitions
-	/**
+	/* Optional ORM settings for local test applications.
 	this.datasource = "coolblog";
 	this.ormEnabled = "true";
 	this.ormSettings = {
@@ -64,21 +52,25 @@ component{
 		eventHandler = "cborm.models.EventHandler",
 		skipcfcWithError = false
 	};
-	**/
+	*/
 
+	/**
+	 * onRequestStart
+	 *
+	 * Starts or restarts the ColdBox virtual application for TestBox requests.
+	 */
 	function onRequestStart( required targetPage ){
 
-		// Set a high timeout for long running tests
+		// Allow enough time for full integration crawls.
 		setting requestTimeout="9999";
-		// New ColdBox Virtual Application Starter
 		request.coldBoxVirtualApp = new coldbox.system.testing.VirtualApp( appMapping = "/root" );
 
-		// If hitting the runner or specs, prep our virtual app
+		// Start ColdBox only for the runner and spec requests.
 		if ( getBaseTemplatePath().replace( expandPath( "/tests" ), "" ).reFindNoCase( "(runner|specs)" ) ) {
 			request.coldBoxVirtualApp.startup();
 		}
 
-		// ORM Reload for fresh results
+		// Restart ColdBox when the request asks for a reinit.
 		if( structKeyExists( url, "fwreinit" ) ){
 			if( structKeyExists( server, "lucee" ) ){
 				pagePoolClear();
@@ -90,22 +82,23 @@ component{
 		return true;
 	}
 
+	/**
+	 * onRequestEnd
+	 *
+	 * Ends the TestBox request.
+	 */
 	public void function onRequestEnd( required targetPage ) {
 		request.coldBoxVirtualApp.shutdown();
 	}
 
     /**
+     * shouldEnableFullNullSupport
+     *
      * Reads the FULL_NULL environment variable to decide this.enableNullSupport.
      *
-     * This deliberately avoids createObject( "java", ... ) when the engine
-     * exposes the environment through server.system (Lucee and BoxLang do). On
-     * BoxLang, resolving a Java class in the Application.cfc pseudo-constructor
-     * while the application is still being defined initializes the request's
-     * class resolver WITHOUT the this.javaSettings jars, so every
-     * createObject( "java", ... ) for a javaSettings class fails for the whole
-     * first request after server start (the Playwright specs then fail on a
-     * cold server). Adobe has no server.system, so it keeps the Java fallback;
-     * the bug does not occur there.
+     * Avoid Java on Lucee and BoxLang. On BoxLang, loading a Java class here
+     * before this.javaSettings takes effect prevents the first request from
+     * finding Playwright classes. Adobe ColdFusion uses the Java fallback.
      */
     private boolean function shouldEnableFullNullSupport() {
         if ( server.keyExists( "system" ) && server.system.keyExists( "environment" ) ) {

@@ -1,23 +1,16 @@
 /**
- * Integration specs for SitemapJobRegistry.cfc.
- *
- * The registry runs real crawls of the sample site (the same site ModuleSpec
- * crawls) on its background thread pool, so these specs queue jobs and poll until
- * they finish. They prove: a queued job completes and writes its file, several
- * jobs run and finish independently, the job pool drains a backlog, cancel/remove
- * work, and queue() requires a filePath.
- *
- * The registry is a singleton, so getInstance returns the one shared instance with
- * its one job pool. Each job writes to its own temp file, cleaned up in afterAll.
- *
- * Local run recipe:
- *   1. box server start serverConfigFile=server-adobe@2023.json
- *   2. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.SitemapJobRegistrySpec"
+ * Tests job queuing, completion, concurrency, cancellation, removal, and files.
+ * Each job crawls the sample site on the registry's background thread pool.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
     variables.serverRoot = "http#( CGI.HTTPS == "on" ? 's' : '' )#://" & CGI.HTTP_HOST & "/";
 
+    /**
+     * beforeAll
+     *
+     * Loads the shared dependencies and fixtures for these specs.
+     */
     function beforeAll(){
         super.beforeAll();
         setup();
@@ -25,11 +18,16 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
         variables.appRoot  = variables.serverRoot & "tests/resources/sample-site/";
         variables.registry = getInstance( "SitemapJobRegistry@sitemap-spider" );
         variables.tempDir  = getTempDirectory() & "sitemap-job-tests/";
-        // Files and job ids created by the specs, cleaned up below.
+        // Track job records and files so afterAll() can remove them.
         variables.createdFiles = [];
         variables.createdJobs  = [];
     }
 
+    /**
+     * afterAll
+     *
+     * Restores shared state changed by these specs.
+     */
     function afterAll(){
         // Remove the job records and any files written.
         for ( var jobId in variables.createdJobs ) {
@@ -43,23 +41,33 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
         super.afterAll();
     }
 
-    // A unique temp file path for a job, tracked for cleanup.
+    /**
+     * tempFile
+     *
+     * Returns and tracks a unique temporary sitemap path.
+     */
     private string function tempFile(){
         var path = variables.tempDir & createUUID() & ".xml";
         variables.createdFiles.append( path );
         return path;
     }
 
-    // Queues a sample-site crawl and tracks the job id for cleanup.
+    /**
+     * queueSampleCrawl
+     *
+     * Queues the sample site and tracks the job for cleanup.
+     */
     private string function queueSampleCrawl(){
         var jobId = variables.registry.queue( url = variables.appRoot, filePath = tempFile() );
         variables.createdJobs.append( jobId );
         return jobId;
     }
 
-    // Polls a job until it reaches a terminal status or the timeout passes, then
-    // returns the final job struct. A generous timeout keeps a slow engine from
-    // failing a correct crawl.
+    /**
+     * waitForTerminal
+     *
+     * Waits for a final status or returns the job when the timeout expires.
+     */
     private struct function waitForTerminal( required string jobId, numeric timeoutMs = 30000 ){
         var terminal = [ "completed", "failed", "canceled" ];
         var deadline = getTickCount() + arguments.timeoutMs;
@@ -76,6 +84,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
         return variables.registry.getJob( arguments.jobId );
     }
 
+    /**
+     * run
+     *
+     * Defines the SitemapJobRegistrySpec examples.
+     */
     function run(){
         describe( "SitemapJobRegistry", function(){
 
@@ -173,9 +186,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
             } );
 
             it( "runs a job with the backend named on the job", function(){
-                // Naming the default backend explicitly is the same thing a host
-                // does for a site that needs Playwright, without needing the
-                // Playwright driver installed to test the plumbing.
+                // Use the default backend explicitly so this test does not
+                // require the Playwright driver.
                 var jobId = variables.registry.queue(
                     url        = variables.appRoot,
                     filePath   = tempFile(),
@@ -319,11 +331,9 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
                 expect( seen ).toInclude( "completed" );
             } );
 
-            it( "cancel() on a running/queued job drives it to a terminal state", function(){
+            it( "cancel() moves a running or queued job to a final state", function(){
                 var jobId = queueSampleCrawl();
-                // Ask to cancel right away. Depending on timing the crawl may finish
-                // first (completed) or stop early (canceled); either is a valid
-                // terminal outcome. The point is cancel never wedges the job.
+                // The crawl can complete before the cancellation is processed.
                 variables.registry.cancel( jobId );
 
                 var job = waitForTerminal( jobId );

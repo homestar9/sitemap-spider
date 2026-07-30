@@ -1,22 +1,16 @@
 /**
- * Integration specs for the create() stats struct and the metadata sidecar
- * (writeMetadata / metadataPath / metadataIncludeUrls / readMetadata).
- *
- * Three shared crawls of the sample site run in beforeAll — one without a
- * filePath (stats only), one with a filePath but metadata off (the default),
- * one with writeMetadata on — and the specs read those. Specs that need a
- * different option combination (custom metadataPath, URL details, gzip) run
- * their own crawl. Everything is written under a private temp directory that
- * afterAll deletes.
- *
- * Local run recipe:
- *   1. box server start serverConfigFile=server-lucee@6.json
- *   2. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.SitemapMetadataSpec"
+ * Tests crawl statistics and JSON metadata, including custom paths, URL details,
+ * gzip output, and readMetadata().
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 	variables.serverRoot = "http#( CGI.HTTPS == "on" ? 's' : '' )#://" & CGI.HTTP_HOST & "/";
 
+	/**
+	 * beforeAll
+	 *
+	 * Loads the shared dependencies and fixtures for these specs.
+	 */
 	function beforeAll(){
 		super.beforeAll();
 		setup();
@@ -25,20 +19,17 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		variables.tempDir = getTempDirectory() & "sitemap-spider-metadata-spec/";
 		variables.service = getInstance( "sitemapService@sitemap-spider" );
 
-		// A crawl with no filePath: the stats struct is still returned, nothing
-		// is written.
+		// Collect statistics without saving a sitemap.
 		variables.baseline = variables.service.create( variables.appRoot );
 
-		// A crawl that saves a sitemap but leaves writeMetadata at its default
-		// (off): no sidecar may appear.
+		// Save a sitemap with metadata disabled.
 		variables.plainFilePath = variables.tempDir & "plain/sitemap.xml";
 		variables.plainResult   = variables.service.create(
 			url      = variables.appRoot,
 			filePath = variables.plainFilePath
 		);
 
-		// A crawl with the sidecar on, written to the default spot next to the
-		// sitemap.
+		// Save metadata beside the sitemap.
 		variables.metaFilePath = variables.tempDir & "meta/sitemap.xml";
 		variables.metaResult   = variables.service.create(
 			url           = variables.appRoot,
@@ -47,6 +38,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		);
 	}
 
+	/**
+	 * afterAll
+	 *
+	 * Restores shared state changed by these specs.
+	 */
 	function afterAll(){
 		if ( directoryExists( variables.tempDir ) ) {
 			directoryDelete( variables.tempDir, true );
@@ -54,6 +50,11 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		super.afterAll();
 	}
 
+	/**
+	 * run
+	 *
+	 * Defines the SitemapMetadataSpec examples.
+	 */
 	function run(){
 		describe( "create() stats struct", function(){
 

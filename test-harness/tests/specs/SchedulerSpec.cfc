@@ -1,27 +1,6 @@
 /**
- * Specs for the module's background upkeep tasks in config/Scheduler.cfc.
- *
- * These cover three problems a host app hit, all of them showing up as a
- * stacktrace in the log for something that was not really broken:
- *
- * 1. Right after a framework reinit, a task could fetch a SitemapJobRegistry
- *    that WireBox had not finished wiring, so it had no store and no
- *    progressMap yet.
- * 2. The .onFailure() handlers called err(), which belongs to ScheduledTask and
- *    not to a scheduler, so a task failure threw a second error on top of the
- *    first.
- * 3. The heartbeat and dead-job tasks ran on a timer forever even with the
- *    default in-memory store, where neither can accomplish anything.
- *
- * Nothing here waits for a real timer to fire. The tasks are inspected directly:
- * isConstrained() reports whether a task would skip its next turn, isDisabled()
- * plus an empty task record "future" shows it was never handed to the executor at
- * all, and getOnTaskFailure() hands back the closure ColdBox would call on a
- * failure.
- *
- * Local run recipe:
- *   1. box server start serverConfigFile=server-lucee@6.json
- *   2. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.SchedulerSpec"
+ * Tests startup recovery, progress heartbeats, stale-job recovery, and task
+ * failure handlers. The examples inspect task state without waiting for timers.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
@@ -34,26 +13,46 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	];
 	variables.bootTask = "sitemap-spider:recover-interrupted-jobs";
 
+	/**
+	 * beforeAll
+	 *
+	 * Loads the shared dependencies and fixtures for these specs.
+	 */
 	function beforeAll(){
 		super.beforeAll();
 		setup();
 	}
 
+	/**
+	 * afterAll
+	 *
+	 * Restores shared state changed by these specs.
+	 */
 	function afterAll(){
 		super.afterAll();
 	}
 
-	/** Returns the module's scheduler object. */
+	/**
+	 * scheduler
+	 *
+	 * Returns the module's scheduler object.
+	 */
 	private any function scheduler(){
 		return getInstance( variables.schedulerName );
 	}
 
-	/** Returns one registered task by name. */
+	/**
+	 * taskNamed
+	 *
+	 * Returns one registered task by name.
+	 */
 	private any function taskNamed( required string name ){
 		return scheduler().getTaskRecord( arguments.name ).task;
 	}
 
 	/**
+	 * isScheduled
+	 *
 	 * True when ColdBox actually handed this task to the executor.
 	 *
 	 * startupTask() fills in the record's "future" only for a task it schedules,
@@ -68,6 +67,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	}
 
 	/**
+	 * withStore
+	 *
 	 * Swaps the registry's store for the duration of one test, then always puts
 	 * the real one back. The registry is a singleton the rest of the suite shares,
 	 * so leaving a test double behind would break later specs.
@@ -94,12 +95,20 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		}
 	}
 
+	/**
+	 * run
+	 *
+	 * Defines the SchedulerSpec examples.
+	 */
 	function run(){
-		describe( "a registry WireBox has not finished wiring", function(){
-			// WireBox puts a singleton in its cache before wiring it unless the
-			// component says threadsafe, so a task firing during a reinit could get
-			// an object whose onDiComplete() had not run. Building one without
-			// onDiComplete() reproduces exactly that object.
+		describe( "a registry before WireBox finishes dependency injection", function(){
+			// WireBox can cache this singleton before onDiComplete() runs.
+			// Build that state to test a scheduler task during a reinit.
+			/**
+			 * halfBuilt
+			 *
+			 * Returns a registry whose dependency injection is incomplete.
+			 */
 			function halfBuilt(){
 				return createObject( "component", "sitemap-spider.models.jobs.SitemapJobRegistry" ).init();
 			}
@@ -126,9 +135,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		} );
 
 		describe( "task failure handlers", function(){
-			// ScheduledTask.run() has already logged the real error by the time it
-			// calls one of these. A handler that throws adds a second, misleading
-			// stacktrace, which is what err() used to do from in here.
+			// Failure handlers must not replace the original error with a new one.
 			it( "log the failure without throwing a second error", function(){
 				var tasks = [ variables.bootTask ];
 				tasks.append( variables.timerTasks, true );
@@ -158,10 +165,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				}
 			} );
 
-			// The check above only proves a task would skip its turn. This one
-			// proves it never gets a turn: ColdBox returns early for a disabled task
-			// in startupTask(), before it calls start(), so nothing is handed to the
-			// executor and no thread ever wakes on the interval.
+			// Disabled tasks must not receive a scheduled executor thread.
 			it( "never hands either timer task to the executor", function(){
 				for ( var name in variables.timerTasks ) {
 					expect( taskNamed( name ).isDisabled() ).toBeTrue( "#name# should be disabled at load time" );
@@ -170,8 +174,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 			it( "still lets the once-per-boot sweep run", function(){
-				// This one is what a durable single-server store needs, and it costs
-				// one call per boot, so it is never gated.
+				// Durable single-server stores still need startup recovery.
 				expect( taskNamed( variables.bootTask ).isConstrained() ).toBeFalse();
 				expect( taskNamed( variables.bootTask ).isDisabled() ).toBeFalse();
 				expect( isScheduled( variables.bootTask ) ).toBeTrue();
@@ -228,10 +231,8 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 		} );
 
 		describe( "a job store having a bad day", function(){
-			// ColdBox evaluates a .when() closure outside the try/catch in
-			// ScheduledTask.run(). An error escaping it reaches the scheduled
-			// executor, which cancels the task permanently instead of skipping one
-			// turn. So a store that throws has to read as a plain "no".
+			// An error from .when() cancels the scheduled task permanently.
+			// A store error must therefore make the condition return false.
 			it( "holds the timer tasks back instead of killing them off", function(){
 				withStore( new tests.resources.BrokenJobStore(), function( registry ){
 					for ( var name in variables.timerTasks ) {

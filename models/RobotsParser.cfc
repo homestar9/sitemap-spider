@@ -1,7 +1,9 @@
 component accessors=true hint="Parses robots.txt content and answers allow/disallow questions" {
 
     /**
-     * Initializes the parser to an empty rule set (allow everything).
+     * init
+     *
+     * Resets the parser to allow every path.
      */
     function init() {
         resetState();
@@ -10,61 +12,38 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
 
     /**
      * parse
-     * Reads robots.txt content and stores the rules that apply to the given
-     * user agent. Call this once per crawl; it fully resets prior state, so one
-     * instance can be reused across crawls.
+     * Parses the User-agent, Disallow, Allow, and Crawl-delay directives that
+     * apply to userAgent. Rules use RFC-9309 longest-match behavior; Allow wins
+     * a tie. Paths are case-sensitive. Other directives are ignored.
      *
-     * Supported directives: User-agent, Disallow, Allow, Crawl-delay. Disallow
-     * and Allow paths support the "*" (any sequence) and "$" (end of path)
-     * wildcards, matched with longest-match precedence (on a tie, Allow wins),
-     * following the Google / RFC 9309 style. Sitemap lines and "#" comments are
-     * ignored.
-     *
-     * The user-agent group is chosen by RFC 9309 rules: the crawler's product
-     * token (the userAgent up to its first "/" or space) is compared for
-     * case-insensitive equality against each group's token, and the "*" group is
-     * the fallback (see applyGroup). Disallow/Allow matching includes the query
-     * string when the caller passes one (see isPathAllowed).
-     *
-     * Not supported (documented limitations): case-insensitive paths (paths are
-     * matched case-sensitively, which RFC 9309 requires) and the Host / Clean-param
-     * directives.
-     *
-     * @content The raw robots.txt body. An empty string yields an allow-all rule
-     *          set, which is also the graceful fallback when robots.txt is
-     *          missing or unreachable.
-     * @userAgent The crawler's user agent, used to pick the matching group.
+     * @content Raw robots.txt text. Empty text allows every path.
+     * @userAgent Crawler user agent used to select a rule group.
      */
     void function parse( required string content, string userAgent = "*" ) {
         resetState();
 
-        // groups[ agentToken ] = { rules: [], crawlDelay: 0 }.
+        // Store rules and crawl delay by user-agent token.
         var groups = {};
-        // The user-agent tokens the current rule block applies to. Consecutive
-        // User-agent lines with no rule between them share the following block.
+        // Consecutive User-agent lines share one rule block.
         var currentAgents = [];
-        // Set to true once a rule (Disallow/Allow/Crawl-delay) is seen, so the
-        // next User-agent line starts a fresh block instead of joining this one.
+        // A User-agent after a rule starts a new block.
         var blockHasRules = false;
 
-        // Split on CR and LF, each treated as its own delimiter, so both Unix and
-        // Windows line endings work. Empty lines are dropped and skipped below.
+        // Accept Unix and Windows line endings.
         for ( var rawLine in listToArray( arguments.content, chr( 10 ) & chr( 13 ) ) ) {
-            // Strip a trailing "##" comment and surrounding whitespace. The
-            // appended "##" (a literal "#") guarantees a delimiter is present, so
-            // listFirst returns the whole line when it has no comment.
+            // Remove a trailing # comment.
             var line = trim( listFirst( rawLine & "##", "##" ) );
             if ( !len( line ) || !find( ":", line ) ) {
                 continue;
             }
 
             var field = trim( listFirst( line, ":" ) );
-            // Everything after the first ":" is the value (values can contain ":").
+            // Keep colons that appear inside the value.
             var value = trim( mid( line, find( ":", line ) + 1, len( line ) ) );
 
             switch ( lCase( field ) ) {
                 case "user-agent":
-                    // A User-agent line after a rule block starts a new block.
+                    // Start a new block after any rule.
                     if ( blockHasRules ) {
                         currentAgents = [];
                         blockHasRules = false;
@@ -78,7 +57,7 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
                 case "disallow":
                 case "allow":
                     blockHasRules = true;
-                    // An empty value is a no-op: "Disallow:" means allow all.
+                    // An empty Disallow or Allow value adds no rule.
                     if ( !len( value ) ) {
                         break;
                     }
@@ -101,7 +80,7 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
                     break;
 
                 default:
-                    // Sitemap and any other directive: ignore.
+                    // Ignore unsupported directives.
                     break;
             }
         }
@@ -111,22 +90,18 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
 
     /**
      * isPathAllowed
-     * Returns whether the crawler may fetch the given path. The path should be
-     * site-root-relative and start with "/", and may carry a query string (e.g.
-     * "/list?sort=asc") so a rule like "Disallow: /*?sort=" can match. Finds every
-     * rule whose pattern matches, then applies longest-match precedence: the rule
-     * with the longest original pattern wins, and a tie is resolved in favor of
-     * Allow. A path with no matching rule is allowed.
+     * Returns whether the selected rules allow a root-relative path. The longest
+     * matching rule wins. Allow wins when two matching rules have equal length.
      *
-     * @path The site-root-relative path (plus optional "?query") to check.
+     * @path Root-relative path with an optional query string.
      */
     boolean function isPathAllowed( required string path ) {
         var bestLength = -1;
-        var allowed    = true; // no matching rule -> allowed
+        var allowed    = true; // No matching rule allows the path.
 
         for ( var rule in variables.rules ) {
             if ( reFind( rule.regex, arguments.path ) ) {
-                // Longer pattern wins; on an equal-length tie, Allow wins.
+                // Prefer a longer rule, then Allow on a tie.
                 if (
                     rule.length > bestLength ||
                     ( rule.length == bestLength && rule.type == "allow" )
@@ -142,8 +117,7 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
 
     /**
      * getCrawlDelay
-     * Returns the Crawl-delay in seconds for the active user-agent group, or 0
-     * when none was declared.
+     * Returns Crawl-delay for the selected user-agent group, or 0.
      */
     numeric function getCrawlDelay() {
         return variables.crawlDelay;
@@ -151,25 +125,14 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
 
     /**
      * applyGroup
-     * Picks the rule set for the configured user agent and copies it into instance
-     * state, following RFC 9309 section 2.2.1. The crawler's product token is the
-     * user agent up to its first "/" or space (e.g. "MyBot/1.0" -> "MyBot"). A
-     * group whose token equals that product token, compared case-insensitively,
-     * wins. If none matches, the "*" group is used; if that is absent too, the
-     * allow-all empty state is left in place.
+     * Selects an exact, case-insensitive product-token group. The product token
+     * ends at the first slash or space. The * group is the fallback.
      *
-     * This is stricter than a substring match: a group token "spider" no longer
-     * matches a "sitemap-spider" crawler, so an unrelated group cannot capture the
-     * crawl by accident. Groups are keyed by token in parse(), so two blocks with
-     * the same token already have their rules merged there, which covers RFC 9309's
-     * "combine matching groups" rule for the equality case.
-     *
-     * @groups The parsed groups keyed by user-agent token.
-     * @userAgent The crawler's user agent.
+     * @groups Parsed groups keyed by user-agent token.
+     * @userAgent Crawler user agent.
      */
     private void function applyGroup( required struct groups, required string userAgent ) {
-        // Reduce the user agent to its product token: drop the first "/" or space
-        // and everything after it.
+        // Remove the version or description after the product token.
         var productToken = reReplace( arguments.userAgent, "[/ ].*$", "" );
 
         var chosen = "";
@@ -193,17 +156,10 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
 
     /**
      * patternToRegex
-     * Converts a robots.txt path pattern into a regular expression anchored at
-     * the start. Robots patterns are prefix matches: everything after the pattern
-     * is unconstrained unless the pattern ends with "$", which anchors the end.
-     * "*" matches any sequence of characters. All other regex metacharacters are
-     * escaped so they match literally.
+     * Converts a robots.txt path pattern to a start-anchored regular expression.
+     * * matches any text and a final $ anchors the end.
      *
-     * Examples:
-     *   "/disallow.cfm"    -> "^/disallow\.cfm"
-     *   "/private/*.cfm$"  -> "^/private/.*\.cfm$"
-     *
-     * @pattern The raw Disallow/Allow value.
+     * @pattern Disallow or Allow path pattern.
      */
     private string function patternToRegex( required string pattern ) {
         var value = arguments.pattern;
@@ -218,7 +174,7 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
             if ( ch == "*" ) {
                 regex &= ".*";
             } else if ( refind( "[\\^$.|?*+()\[\]{}]", ch ) ) {
-                // Escape a regex metacharacter so it matches literally.
+                // Match regex metacharacters literally.
                 regex &= "\" & ch;
             } else {
                 regex &= ch;
@@ -230,7 +186,7 @@ component accessors=true hint="Parses robots.txt content and answers allow/disal
 
     /**
      * resetState
-     * Clears the active rule set back to allow-all.
+     * Clears the selected rules and crawl delay.
      */
     private void function resetState() {
         variables.rules      = [];

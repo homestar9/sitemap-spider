@@ -1,60 +1,62 @@
 /**
- * Regression specs for the task 04 parser correctness fixes.
- *
- * Covers the behaviors task 04 changed in Parser.cfc:
- *   - cleanUrl() trims ends, encodes interior spaces as %20 (never deletes them),
- *     normalizes backslashes, and strips the fragment including the "#".
- *   - getCanonicalUrl() tokenizes the Link header and finds a canonical entry
- *     anywhere in a single- or multi-relation Link header, quoted or unquoted, in
- *     any parameter position (task 17).
- *   - getLastModified() parses the HTTP Last-Modified header (RFC 1123) or a
- *     meta-tag date into a real date object, or returns "" (task 10).
- *
- * Task 05 adds coverage for getLinks() (nofollow filtering, relative-href
- * resolution, duplicate removal, notAllowedPattern rejection) and isNoFollow()
- * (single- and multi-value rel attributes).
- *
- * Task 06 makes Parser the single owner of the URL-allowance rule, so the
- * isUrlAllowed() coverage moved here from CrawlerSpec.
- *
- * cleanUrl() and isUrlAllowed() are public; isNoFollow() is private and exposed
- * here with TestBox makePublic().
- *
- * Local run recipe:
- *   1. box server start serverConfigFile=server-adobe@2023.json
- *   2. box testbox run runner="http://localhost:61002/tests/runner.cfm" bundles="tests.specs.ParserSpec"
+ * Tests Parser link extraction, URL normalization, canonical URLs, robots
+ * directives, sitemap extensions, and last-modified dates. TestBox exposes the
+ * private isNoFollow() helper for direct examples.
  */
 component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
+	/**
+	 * beforeAll
+	 *
+	 * Loads the shared dependencies and fixtures for these specs.
+	 */
 	function beforeAll(){
 		super.beforeAll();
 		setup();
 
 		variables.parser = getInstance( "Parser@sitemap-spider" );
 		variables.jsoup  = getInstance( "javaloader:org.jsoup.Jsoup" );
-		// cleanUrl() and isUrlAllowed() are public (task 06 made Parser the single
-		// owner of both). isNoFollow() is still private, so expose it here.
+		// Expose the private helper tested by this component.
 		makePublic( variables.parser, "isNoFollow" );
-		// getLinks()/isNoFollow()/isUrlAllowed() filter by host, so set the host
-		// the fixtures use.
+		// Use the same host as the link fixtures.
 		variables.parser.setHostName( "example.test" );
 	}
 
+	/**
+	 * afterAll
+	 *
+	 * Restores shared state changed by these specs.
+	 */
 	function afterAll(){
 		super.afterAll();
 	}
 
 	// Parses html with an explicit base URI so jsoup's abs:href resolves relative
 	// hrefs. parser.parseHtml() sets no base URI, so it cannot be used here.
+	/**
+	 * parseWithBase
+	 *
+	 * Parses HTML with the shared base URL.
+	 */
 	private any function parseWithBase( required string html, required string baseUri ){
 		return variables.jsoup.parse( arguments.html, arguments.baseUri );
 	}
 
 	// Parses an anchor tag and returns its jsoup element, for isNoFollow() tests.
+	/**
+	 * anchor
+	 *
+	 * Returns an HTML anchor for an href.
+	 */
 	private any function anchor( required string tag ){
 		return variables.jsoup.parse( arguments.tag ).select( "a" ).first();
 	}
 
+	/**
+	 * run
+	 *
+	 * Defines the ParserSpec examples.
+	 */
 	function run(){
 		describe( "Parser correctness fixes", function(){
 
@@ -93,10 +95,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			} );
 
-			// Task 16 folded the URL normalization policy into cleanUrl's final
-			// step (Parser.normalizeUrl): lowercase scheme + host, preserve path
-			// case, strip session/tracking params from the query and a
-			// ";jsessionid=" path parameter.
+			// cleanUrl() normalizes the host and removes session and tracking data.
 			describe( "cleanUrl() URL normalization", function(){
 
 				it( "lowercases the scheme and host but preserves path case", function(){
@@ -151,9 +150,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			describe( "isUrlAllowed()", function(){
 
-				// Moved from CrawlerSpec in task 06: Parser is now the single owner of
-				// the URL-allowance rule and the Crawler delegates to it. The host is
-				// set to example.test in beforeAll, which isUrlAllowed() checks.
+				// isUrlAllowed() compares URLs with the host set in beforeAll().
 
 				it( "allows a normal .cfm page URL on the host", function(){
 					expect( variables.parser.isUrlAllowed( "http://example.test/contact.cfm" ) ).toBeTrue();
@@ -193,9 +190,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					expect( variables.parser.getCanonicalUrl( fetchResult ) ).toBe( "" );
 				} );
 
-				// Task 17 tokenizer hardening: rel may sit after other params, an
-				// exact "canonical" token is required, and commas inside a URL or a
-				// quoted param value must not split an entry.
+				// A Link header can contain multiple entries and quoted commas.
 
 				it( "finds canonical when rel is not the first parameter", function(){
 					var fetchResult = { headers : { "Link" : '<https://example.test/page.cfm>; type="text/html"; rel="canonical"' } };
@@ -235,8 +230,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "resolves a relative canonical href against the parse base URI", function(){
-					// With task 17, parseHtml can carry a base URI, so a relative
-					// <link rel=canonical> resolves to an absolute URL via abs:href.
+					// parseHtml() uses the base URI to resolve the relative href.
 					var page = variables.parser.parseHtml(
 						'<html><head><link rel="canonical" href="canonical.cfm"></head></html>',
 						"http://example.test/dir/"
@@ -309,9 +303,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				} );
 
 				it( "resolves a relative href when parseHtml is given a base URI and the page has no <base> tag", function(){
-					// Exercises the real production path: task 17 lets parseHtml take
-					// a base URI, so a page with a relative href and no <base> tag
-					// still yields absolute links. Before task 17 this returned [].
+					// The page URL resolves relative links when no <base> tag exists.
 					var page = variables.parser.parseHtml(
 						'<html><body><a href="page.cfm">link</a></body></html>',
 						"http://example.test/dir/"

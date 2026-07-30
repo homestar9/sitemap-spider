@@ -1,52 +1,37 @@
 /**
  * FakeBrowser
- * A test double for the real Jsoup browser. It lets CrawlerSpec drive a
- * multi-page breadth-first crawl without any real HTTP.
  *
- * It implements the same IBrowser.fetchUrl( url ) method the Crawler calls, and
- * returns the same struct shape the real models/browsers/Jsoup.cfc returns:
- *   { url, headers (struct), contentType, html (optional) }
- * The "html" key is only present for pages added with addPage(); leaving it out
- * makes the Crawler take its header-only path.
- *
- * Set up a page graph with addPage() and mark failures with failOn(). Every
- * fetchUrl() call is recorded in requestedUrls in call order, so a spec can
- * assert breadth-first visit order.
- *
- * It does not declare `implements="IBrowser"` because the interface lives in the
- * module's models/browsers folder and is not reachable by a mapping from here.
- * The Crawler only calls browser.fetchUrl(), so matching that one method is
- * enough.
+ * Returns configured fetch results without HTTP. Specs add pages or failures
+ * and inspect requestedUrls to check fetch order.
  */
 component {
 
+    /**
+     * init
+     *
+     * Creates empty fake response collections.
+     */
     function init() {
         variables.pages        = {}; // url -> fetch-result struct
         variables.throwUrls    = {}; // url -> error message
         variables.requestedUrls = []; // every fetchUrl() call, in order
         variables.robotsContent = ""; // body returned by getText() (robots.txt)
         variables.parallelSupported = true; // what supportsParallel() reports
-        // Lock name guarding requestedUrls, so the recording is safe when the
-        // parallel crawler calls fetchUrl() from several worker threads at once.
+        // Use one lock name to record parallel fetches safely.
         variables.recordLock   = "FakeBrowser-" & createUUID();
         return this;
     }
 
     /**
      * addPage
+     *
      * Registers an HTML page the crawler can fetch.
      *
      * @url The absolute URL of the page.
-     * @html The page body. Use absolute hrefs in <a> tags, because the Parser
-     *       parses this html with no base URI, so only absolute hrefs resolve.
-     * @headers Optional response headers (e.g. { "Last-Modified": "..." }).
-     * @finalUrl The URL returned in the result's "url" key. Defaults to @url. Set
-     *           it to a different URL to simulate a followed HTTP 30x, the way the
-     *           real Jsoup browser returns response.url() (the post-redirect URL).
-     * @redirectChain Optional array of { url, status } hops. When passed, it is
-     *           returned under the result's "redirectChain" key, the way the real
-     *           browsers report a followed redirect, so a spec can assert the
-     *           Crawler's redirects report without real HTTP.
+     * @html Page body. Links must be absolute because Parser has no base URI.
+     * @headers Optional response headers.
+     * @finalUrl Final URL used to simulate a followed redirect.
+     * @redirectChain Optional array of redirect steps.
      */
     function addPage(
         required string url,
@@ -70,9 +55,8 @@ component {
 
     /**
      * failOn
-     * Makes fetchUrl() throw for the given URL, so the Crawler records it in
-     * badUrls. Mirrors the StatusCodeException the real Jsoup browser throws on a
-     * non-200 response.
+     *
+     * Makes fetchUrl() throw StatusCodeException for the given URL.
      *
      * @url The URL that should fail.
      * @message The error message to throw.
@@ -84,9 +68,8 @@ component {
 
     /**
      * fetchUrl
-     * Returns the registered page struct for a URL, throws if the URL was marked
-     * with failOn(), and records the call. Throws for any unregistered URL so a
-     * spec fails loudly instead of silently crawling nothing.
+     *
+     * Records the request and returns its page or throws its configured error.
      *
      * @url The URL to fetch.
      */
@@ -149,9 +132,8 @@ component {
 
     /**
      * setRobots
-     * Registers the body getText() returns, so a spec can drive the Crawler's
-     * robots.txt handling. When unset, getText() returns "" (no rules -> allow
-     * all), matching a site with no robots.txt.
+     *
+     * Sets the robots.txt body returned by getText(). Empty text allows all URLs.
      *
      * @content The robots.txt body to serve.
      */
@@ -162,8 +144,8 @@ component {
 
     /**
      * getText
-     * Returns the registered robots.txt body (empty by default). Mirrors the real
-     * Jsoup browser's getText(), which the Crawler calls once at crawl start.
+     *
+     * Returns the registered robots.txt body.
      *
      * @url The URL to fetch (ignored; this fake serves one robots body).
      */
@@ -173,8 +155,8 @@ component {
 
     /**
      * shutdown
-     * No-op. The Crawler calls this when a crawl finishes; the real Playwright
-     * backend closes its browser here, but this fake holds no resources.
+     *
+     * Releases no resources because this fake does not open a browser.
      */
     void function shutdown() {
     }

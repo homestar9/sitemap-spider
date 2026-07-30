@@ -1,16 +1,14 @@
 /**
- * Demo dashboard for background sitemap jobs.
- *
- * Shows how a host app uses SitemapJobRegistry: queue a crawl, list running and
- * finished jobs with live progress, cancel one, and download the saved file. The
- * view polls the status action for live updates.
+ * Shows background job progress and lets users queue, cancel, and download jobs.
  */
 component {
 
     property name="registry" inject="SitemapJobRegistry@sitemap-spider";
 
     /**
-     * Renders the job list. The view also polls status() for live refreshes.
+     * index
+     *
+     * Renders the job list, which polls status() for updates.
      */
     any function index( event, rc, prc ) {
         prc.jobs = registry.listJobs();
@@ -18,8 +16,9 @@ component {
     }
 
     /**
-     * Queues a crawl for the submitted URL and returns to the list. Each job writes
-     * to its own temp file, since a background job has no response to stream.
+     * queue
+     *
+     * Queues the submitted URL to a unique temporary file.
      */
     any function queue( event, rc, prc ) {
         param name="rc.url" default="";
@@ -38,6 +37,8 @@ component {
     }
 
     /**
+     * status
+     *
      * Returns the current job list as JSON, for the view's polling refresh.
      */
     any function status( event, rc, prc ) {
@@ -45,6 +46,8 @@ component {
     }
 
     /**
+     * cancel
+     *
      * Cancels a job and returns to the list.
      */
     any function cancel( event, rc, prc ) {
@@ -56,6 +59,8 @@ component {
     }
 
     /**
+     * remove
+     *
      * Removes a job record and returns to the list.
      */
     any function remove( event, rc, prc ) {
@@ -67,16 +72,16 @@ component {
     }
 
     /**
-     * Streams a finished job's saved sitemap file as a download. Prefers the actual
-     * written path (which may carry ".gz") recorded in the job's progress summary,
-     * falling back to the requested filePath.
+     * download
+     *
+     * Downloads the saved sitemap for a finished job.
      */
     any function download( event, rc, prc ) {
         param name="rc.id" default="";
         var job = registry.getJob( rc.id );
 
-        // Prefer the path actually written, which the job records in result and
-        // which may carry ".gz"; fall back to the path the job was queued with.
+        // Use result.filePath because gzip output adds .gz.
+        // Older records can contain only the requested filePath.
         var path = "";
         if ( job.keyExists( "result" ) && isStruct( job.result ) && job.result.keyExists( "filePath" ) && len( job.result.filePath ) ) {
             path = job.result.filePath;
