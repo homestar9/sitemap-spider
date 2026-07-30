@@ -84,12 +84,15 @@ var result = getInstance( "SitemapService@sitemap-spider" ).create(
 | `sitemaps` | array | The child sitemap files when `type` is `"index"` (each with `filename`, `xml`, and, if saved, `filePath`). Empty-ish for a single sitemap. |
 | `sitemapCount` | number | Number of sitemap files: `1` for a single sitemap, otherwise the child count. |
 | `duration` | number | Total crawl + generate time in milliseconds. |
+| `stats` | struct | Pre-computed counts for dashboards and job records, so you never have to derive them from the arrays below: `{ generatedAt, durationMs, urlCount, sitemapCount, type, badUrlCount, ignoredCount, redirectCount }`. `generatedAt` is an ISO-8601 timestamp string with the server's UTC offset (e.g. `2026-07-29T14:03:22-07:00`); `durationMs` equals `duration`. |
 | `processedUrls` | array | Every URL the crawler visited (used to avoid re-visiting). |
 | `badUrls` | struct | URLs that failed to fetch or returned a non-HTML / error response, keyed by URL with a `{ message }` value. |
 | `ignored` | array | URLs the crawl dropped, each `{ url, reason }`. `reason` is `"nofollow"`, `"excluded"` (matched `excludeUrls` or `excludePattern`), `"disallowed"` (blocked by `robots.txt`), `"noindex"` (the page carries a `noindex` robots directive — see `respectNoIndex`), or `"notAllowed"` (a rejected seed that is off-host, the wrong scheme, or an asset URL). A rejected start/seed URL is reported here too. |
 | `redirects` | array | One entry per fetched URL that followed an HTTP redirect: `{ from, to, chain }`. `from` is the requested URL, `to` is the final URL, and `chain` is the hop list, each `{ url, status }`. |
 | `filePath` | string | The path passed as `filePath`, or empty when nothing was saved. |
 | `saved` | boolean | `true` when the sitemap was written to `filePath`. |
+| `metadataPath` | string | Where the metadata sidecar was written, or empty when none was. See `writeMetadata`. |
+| `metadataSaved` | boolean | `true` when the metadata sidecar was written. |
 
 Each entry in `pages` looks like:
 
@@ -139,6 +142,9 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `maxUrlsPerSitemap` | `50000` | sitemaps.org per-file URL limit. Above this the output splits into a sitemap index. |
 | `maxSitemapBytes` | `52428800` | sitemaps.org per-file byte limit (50 MiB, uncompressed). Above this the output splits. |
 | `gzipOutput` | `false` | When true and a `filePath` is given, the sitemap files are written gzip-compressed with a `.gz` suffix (e.g. `sitemap.xml.gz`). Child files and the `<sitemapindex>` `<loc>` entries carry `.gz` too. See the note below on serving `.gz`. |
+| `writeMetadata` | `false` | When true, writes a JSON sidecar holding the `stats` struct, crawl options, and module version. It uses `metadataPath` when configured, otherwise it is written next to `filePath` (`sitemap.xml` → `sitemap.xml.meta.json`). Read it later with `readMetadata()` — see [Host app integration](#host-app-integration). |
+| `metadataPath` | `""` (empty) | Full default filename for the metadata sidecar. Set this outside the webroot to keep it private. An omitted `create()`/`queue()` argument uses this setting; a non-empty argument overrides it; an explicitly empty argument forces adjacent-file derivation. For multiple sitemap outputs, supply a distinct path per crawl or job. |
+| `metadataIncludeUrls` | `false` | When true, the sidecar also carries the full `badUrls` and `ignored` lists, not just their counts. Off by default because the sidecar's default spot is the public webroot next to `sitemap.xml`, where anyone can download it. If you turn this on, point `metadataPath` outside the webroot (or block `*.meta.json` at the web server). |
 | `lastModFormat` | `"date"` | Format of `<lastmod>`: `"date"` writes the date-only form (`YYYY-MM-DD`); `"datetime"` writes the full W3C timestamp (`YYYY-MM-DDThh:mm:ss+HH:MM`) in the server's local timezone. |
 | `includeImages` | `false` | When true, each page's `<img src>` images are emitted as `<image:image>` entries and the `<urlset>` gains the image namespace. Images are not host-filtered (CDN images are kept), capped at 1000 per page. The `create()` `includeImages` argument overrides this setting for a single crawl. |
 | `includeHreflang` | `false` | When true, each page's `<link rel="alternate" hreflang="...">` tags are emitted as `<xhtml:link>` entries and the `<urlset>` gains the xhtml namespace. Alternates are emitted exactly as declared — off-host targets are kept (hreflang usually points at other domains) and `x-default` is allowed. Capped at 1000 per page. The `create()` `includeHreflang` argument overrides this setting for a single crawl. |
@@ -316,6 +322,113 @@ sees links and content that JavaScript adds after load. It needs some setup:
   sitemapService.create( url = "https://example.com/", includeVideos = true );
   ```
 
+## Host app integration
+
+The pieces most host apps wire together: write the sitemap into the webroot,
+point `robots.txt` at it, and keep enough information around to show a "last
+generated" screen in an admin area.
+
+**Keep crawl scope deliberate.** robots.txt paths are prefix matches, and a
+trailing slash is significant. `Disallow: /admin/` blocks descendants such as
+`/admin/users`, but it does not block a link to `/admin`. A slashless
+`Disallow: /admin` blocks both, but also blocks `/administrator`. To target only
+the exact route and its descendants, use:
+
+```text
+User-agent: *
+Disallow: /admin$
+Disallow: /admin/
+```
+
+For a sitemap-specific safety net independent of robots.txt, configure
+`excludePattern = "/admin(?:/|\?|$)"`.
+
+URL paths also remain distinct after normalization: repeated slashes such as
+`//about/` collapse to `/about/`, but `/about` and `/about/` are not merged.
+Sites that serve the same page at both URLs should emit one consistent link
+form and redirect the other, or declare a common `rel="canonical"`.
+
+**Write into the webroot.** Search engines expect `/sitemap.xml` at the site
+root, so pass that as `filePath`:
+
+```cfml
+property name="sitemapService" inject="SitemapService@sitemap-spider";
+
+var result = sitemapService.create(
+    url           = "https://example.com/",
+    filePath      = expandPath( "/sitemap.xml" ),
+    writeMetadata = true
+);
+```
+
+Most web servers serve the physical file directly (a rewrite rule that checks
+"is this a real file?" skips your framework), so no route is needed. Add the
+generated files to `.gitignore` — they are build output, not source.
+
+**Point robots.txt at it.** Add one line so crawlers find the sitemap without
+being told:
+
+```
+Sitemap: https://example.com/sitemap.xml
+```
+
+**Show stats without keeping job records.** Prefer a module-wide private path so
+enabling URL-level details later cannot expose crawl data:
+
+```cfml
+moduleSettings = {
+    "sitemap-spider" : {
+        metadataPath : expandPath( "/../private/sitemap.xml.meta.json" )
+    }
+};
+```
+
+With `writeMetadata` on, every generation writes the sidecar there. When
+`metadataPath` is empty, it instead writes `sitemap.xml.meta.json` beside the
+sitemap. Read it back any time — including after an app restart, when in-memory
+job records are gone:
+
+```cfml
+var metadata = sitemapService.readMetadata( expandPath( "/sitemap.xml" ) );
+if ( metadata.exists ) {
+    // metadata.stats.generatedAt, .urlCount, .sitemapCount, .durationMs,
+    // .badUrlCount — plus metadata.options (how the crawl was configured)
+    // and metadata.moduleVersion.
+}
+```
+
+`readMetadata()` accepts the sitemap path or the sidecar path, returns
+`{ exists : false }` when there is nothing to read, and never throws over a
+missing or corrupt file. A sitemap path follows the configured `metadataPath`;
+an explicit `.meta.json` path is read literally. If one crawl overrides the
+setting — including with an explicit empty string to force adjacent storage —
+pass its returned `result.metadataPath` when reading it. By default the sidecar
+carries only counts and options; keep `metadataIncludeUrls` off unless the
+sidecar is outside the webroot.
+
+**A non-blocking "generate now" button.** `create()` blocks for the whole
+crawl, which is wrong for a button in an admin screen. Queue a background job
+instead and poll it, or listen for the completion events:
+
+```cfml
+property name="jobs" inject="SitemapJobRegistry@sitemap-spider";
+
+// Returns a job id immediately; the crawl runs on a pool thread.
+var jobId = jobs.queue(
+    url           = "https://example.com/",
+    filePath      = expandPath( "/sitemap.xml" ),
+    writeMetadata = true
+);
+
+// Poll from the screen: jobs.getJob( jobId ).progress has live counters.
+// Or react when it finishes: the module announces onSitemapJobCompleted /
+// onSitemapJobFailed interception points with { jobId, record }.
+```
+
+See [Background jobs](#background-jobs) for the full job API, and
+[Keeping job records](#keeping-job-records) if you want job history to survive
+restarts too.
+
 ## Background jobs
 
 `SitemapService.create()` blocks until the crawl finishes, which is fine for one
@@ -336,7 +449,8 @@ var jobId = jobs.queue(
 var job = jobs.getJob( jobId );
 // job.status   -> queued | running | completed | failed | canceled | interrupted
 // job.progress -> { pagesFound, urlsProcessed, badUrls, remaining, elapsedMs, ... }
-// job.result   -> { saved, filePath, type, sitemapCount } once it completes
+// job.result   -> { saved, filePath, type, sitemapCount, stats,
+//                   metadataPath, metadataSaved } once it completes
 
 jobs.listJobs();            // every job, newest first
 jobs.cancel( jobId );       // stops after the page it is on
@@ -364,6 +478,11 @@ engine's thread pool.
   use the setting. The values are resolved when the job is queued and stored on
   its record, so a job runs with the settings it was queued under even if a
   setting changes before its turn comes up.
+- **`writeMetadata`, `metadataPath`, `metadataIncludeUrls`** control the JSON
+  metadata sidecar for that job, same as on `create()`. Resolved at queue time
+  like the extension flags, including the module-wide `metadataPath`; an
+  explicit empty path forces adjacent storage. The finished job's `result`
+  carries `stats`, `metadataPath`, and `metadataSaved`.
 - **`meta`** is a struct of your own values (site id, customer id, anything). It
   is stored as-is, returned with every read, and can be filtered on:
   `jobs.listJobs( { customerId : "acme" } )`. This module never looks inside it.

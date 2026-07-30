@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A pre-computed `stats` struct on the `create()` result and on completed job
+  records (`result.stats`): `generatedAt` (ISO-8601 with UTC offset),
+  `durationMs`, `urlCount`, `sitemapCount`, `type`, `badUrlCount`,
+  `ignoredCount`, and `redirectCount`. Saves every caller from deriving counts
+  out of the raw `pages` / `badUrls` / `ignored` / `redirects` collections.
+- A JSON metadata "sidecar" file, for admin screens that show "last generated"
+  stats without keeping job records. `writeMetadata` (setting and per-crawl
+  argument, default off) writes the stats struct, crawl options, and module
+  version. The new module-wide `metadataPath` setting supplies a private default
+  location; when empty, `<filePath minus .gz>.meta.json` is written beside the
+  sitemap. A non-empty per-crawl argument overrides the setting, while an
+  explicitly empty argument forces adjacent-file derivation. This distinction
+  is snapshotted on queued jobs. Move the sidecar outside the webroot before
+  enabling `metadataIncludeUrls`, which adds the full `badUrls` and `ignored`
+  lists. Read it back with the new `SitemapService.readMetadata( path )`, which
+  accepts the sitemap path or the sidecar path and returns `{ exists : false }`
+  instead of throwing when the file is missing or unreadable. A sitemap path
+  honors the module setting; an explicit sidecar path is read literally. A
+  failed sidecar write throws the typed `sitemap-spider.MetadataSaveFailed`.
+  The result struct gained `metadataPath` and `metadataSaved` keys; `queue()`
+  passes all three arguments through and stores them on the job record.
 - `respectNoIndex` setting (default `true`). A page carrying
   `<meta name="robots" content="noindex">` (or `none`) or an
   `X-Robots-Tag: noindex` response header is left out of the sitemap and

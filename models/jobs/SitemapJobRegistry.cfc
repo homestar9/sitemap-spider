@@ -121,6 +121,12 @@ component
 	 * @includeImages  Image sitemap extension for this job. Omit to use the setting.
 	 * @includeHreflang hreflang extension for this job. Omit to use the setting.
 	 * @includeVideos  Video extension for this job. Omit to use the setting.
+	 * @writeMetadata  Write the JSON metadata sidecar after the sitemap. Omit to
+	 *   use the setting. See SitemapService.create.
+	 * @metadataPath   Where to write the sidecar. Omit to use the module setting;
+	 *   pass an explicit empty string to derive it from filePath.
+	 * @metadataIncludeUrls Carry the full badUrls/ignored lists in the sidecar.
+	 *   Omit to use the setting.
 	 * @meta           The host's own values to store with the job.
 	 *
 	 * @return The new job's id.
@@ -137,15 +143,24 @@ component
 		boolean includeImages,
 		boolean includeHreflang,
 		boolean includeVideos,
+		boolean writeMetadata,
+		string metadataPath,
+		boolean metadataIncludeUrls,
 		struct meta           = {}
 	){
-		// The three extension flags are resolved here rather than left null,
-		// because they are written onto the job record and a store cannot save a
-		// null. Resolving at queue time also means the job runs with the settings
-		// the caller queued it under, even if a setting changes before its turn.
+		// The extension and metadata flags are resolved here rather than left
+		// null, because they are written onto the job record and a store cannot
+		// save a null. Resolving at queue time also means the job runs with the
+		// settings the caller queued it under, even if a setting changes before
+		// its turn.
 		param name="arguments.includeImages" default="#settings.includeImages#";
 		param name="arguments.includeHreflang" default="#settings.includeHreflang#";
 		param name="arguments.includeVideos" default="#settings.includeVideos#";
+		param name="arguments.writeMetadata" default="#settings.writeMetadata#";
+		// param preserves an explicitly passed empty string, which is the
+		// per-job escape hatch back to adjacent-file derivation.
+		param name="arguments.metadataPath" default="#settings.metadataPath#";
+		param name="arguments.metadataIncludeUrls" default="#settings.metadataIncludeUrls#";
 
 		if ( !len( arguments.filePath ) ) {
 			throw(
@@ -177,6 +192,9 @@ component
 			"includeImages"  : arguments.includeImages,
 			"includeHreflang": arguments.includeHreflang,
 			"includeVideos"  : arguments.includeVideos,
+			"writeMetadata"  : arguments.writeMetadata,
+			"metadataPath"   : arguments.metadataPath,
+			"metadataIncludeUrls": arguments.metadataIncludeUrls,
 			"meta"           : arguments.meta,
 			"nodeId"         : "",
 			"bootId"         : "",
@@ -257,6 +275,9 @@ component
 				includeImages   = recordFlag( record, "includeImages" ),
 				includeHreflang = recordFlag( record, "includeHreflang" ),
 				includeVideos   = recordFlag( record, "includeVideos" ),
+				writeMetadata   = recordFlag( record, "writeMetadata" ),
+				metadataPath    = recordMetadataPath( record ),
+				metadataIncludeUrls = recordFlag( record, "metadataIncludeUrls" ),
 				progress        = progress
 			);
 
@@ -270,7 +291,10 @@ component
 				"saved"        : result.saved,
 				"filePath"     : result.filePath,
 				"type"         : result.type,
-				"sitemapCount" : result.sitemapCount
+				"sitemapCount" : result.sitemapCount,
+				"stats"        : result.stats,
+				"metadataPath" : result.metadataPath,
+				"metadataSaved": result.metadataSaved
 			};
 		} catch ( any e ) {
 			record.status = "failed";
@@ -298,20 +322,36 @@ component
 	}
 
 	/**
-	 * Reads one of the sitemap extension flags off a job record, falling back to
-	 * the module setting when the record has no such key.
+	 * Reads one of the boolean job flags off a job record, falling back to the
+	 * same-named module setting when the record has no such key.
 	 *
-	 * queue() always writes all three, so the fallback is only for records that
-	 * predate them: ones queued by an older version of this module, or ones a
-	 * persistent store was already holding when the host upgraded.
+	 * queue() always writes all of them, so the fallback is only for records
+	 * that predate a flag: ones queued by an older version of this module, or
+	 * ones a persistent store was already holding when the host upgraded.
 	 *
 	 * @record The job record.
-	 * @key    One of includeImages, includeHreflang, includeVideos.
+	 * @key    One of includeImages, includeHreflang, includeVideos,
+	 *   writeMetadata, metadataIncludeUrls.
 	 */
 	private boolean function recordFlag( required struct record, required string key ){
 		return arguments.record.keyExists( arguments.key )
 			? arguments.record[ arguments.key ]
 			: settings[ arguments.key ];
+	}
+
+	/**
+	 * Reads the snapshotted metadata path from a job record, falling back to the
+	 * module setting only for a legacy record that predates the key.
+	 *
+	 * An existing empty value is returned unchanged because it deliberately means
+	 * "derive the sidecar path from filePath", even if the setting later changes.
+	 *
+	 * @record The persisted job record.
+	 */
+	private string function recordMetadataPath( required struct record ){
+		return arguments.record.keyExists( "metadataPath" )
+			? arguments.record.metadataPath
+			: settings.metadataPath;
 	}
 
 	/**

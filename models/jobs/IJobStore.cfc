@@ -20,12 +20,13 @@
  * A record is a struct with these keys:
  *   id, status, url, filePath, seedUrls, excludeUrls, excludePattern,
  *   publicBaseUrl, runAsync, browserDsl, includeImages, includeHreflang,
- *   includeVideos, meta, nodeId, bootId, ownerId, createdAt, startedAt,
- *   endedAt, heartbeatAt, attempts, progress, result, error, checkpoint
+ *   includeVideos, writeMetadata, metadataPath, metadataIncludeUrls, meta,
+ *   nodeId, bootId, ownerId, createdAt, startedAt, endedAt, heartbeatAt,
+ *   attempts, progress, result, error, checkpoint
  *
- * The three include* keys were added after the first release. A store holding
- * records written before that is still valid: the registry falls back to the
- * module settings for a record that has none.
+ * The include* and metadata* keys were added after records first shipped. A
+ * store holding records written before that is still valid: the registry falls
+ * back to the module settings for a record that has none.
  *
  * status is one of: queued, running, completed, failed, canceled, interrupted.
  * The last four are terminal.

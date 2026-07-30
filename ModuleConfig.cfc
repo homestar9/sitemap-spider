@@ -125,6 +125,24 @@ component {
             // (e.g. "sitemap.xml.gz"). The protocol allows gzipped sitemaps and
             // very large sites rely on them. false writes plain XML.
             gzipOutput : false,
+            // When true and create() is given a filePath, a JSON "sidecar" file
+            // is written next to the sitemap (metadataPath relocates it) holding
+            // the stats struct, the options the crawl ran with, and the module
+            // version, so a host can show "last generated" stats via
+            // readMetadata() without keeping job records. Off by default so
+            // nothing new appears on disk without being asked for.
+            writeMetadata : false,
+            // Full default path for the metadata sidecar. Empty derives the
+            // sidecar name from filePath and writes it beside the sitemap. Set
+            // this to a path outside the webroot to keep metadata private.
+            // A create()/queue() metadataPath argument overrides this setting;
+            // passing an explicit empty string forces adjacent-file derivation.
+            metadataPath : "",
+            // When true, the sidecar also carries the full badUrls and ignored
+            // lists, not just their counts. Off by default: the sidecar's
+            // default spot is the webroot next to sitemap.xml, where anyone can
+            // download it.
+            metadataIncludeUrls : false,
             // Format of the <lastmod> element. "date" writes the date-only W3C
             // form (YYYY-MM-DD), the default. "datetime" writes the full W3C
             // timestamp (YYYY-MM-DDThh:mm:ss+HH:MM) in the server's local

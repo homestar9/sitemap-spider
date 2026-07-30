@@ -4,6 +4,9 @@ component
 
     property name="generator" inject="SitemapGenerator@sitemap-spider";
     property name="settings" inject="coldbox:moduleSettings:sitemap-spider";
+    // The module registration struct, read for its version so the metadata
+    // sidecar can record which module build wrote it.
+    property name="moduleConfig" inject="coldbox:moduleConfig:sitemap-spider";
     property name="logger" inject="logbox:logger:{this}";
     // Used to resolve a fresh Crawler per create() call. The Crawler keeps its
     // whole crawl in variables scope, so it must not be shared across concurrent
@@ -60,7 +63,24 @@ component
      *   the XML leaves out would be a waste, and the reverse cannot work.
      * @includeHreflang Same, for the hreflang alternates extension.
      * @includeVideos Same, for the video extension.
-     * @return A struct containing the crawled pages, sitemap XML, and duration
+     * @writeMetadata When true, a JSON "sidecar" file is written after the
+     *   sitemap, holding the stats struct, the options this crawl ran with, and
+     *   the module version, so a host can show "last generated" stats later via
+     *   readMetadata() without keeping job records. Defaults to the
+     *   writeMetadata module setting (false). Requires filePath or metadataPath;
+     *   with neither, nothing is written. A write failure throws
+     *   sitemap-spider.MetadataSaveFailed (after the sitemap itself was saved).
+     * @metadataPath Where to write the sidecar. Omit it to use the metadataPath
+     *   module setting. Passing an explicit empty string puts the file next to
+     *   the sitemap as "<filePath minus any .gz>.meta.json". That adjacent spot
+     *   is usually the public webroot, so point the setting or argument outside
+     *   the webroot to keep the sidecar private.
+     * @metadataIncludeUrls When true, the sidecar also carries the full badUrls
+     *   and ignored lists, not just their counts. Defaults to the
+     *   metadataIncludeUrls module setting (false) because of the public-webroot
+     *   note above.
+     * @return A struct containing the crawled pages, sitemap XML, duration, and
+     *   a pre-computed stats struct (see buildStats)
      */
     struct function create(
         required any url, // String or array of strings
@@ -74,7 +94,10 @@ component
         string browserDsl = "", // Per-crawl browser backend; empty uses the setting
         boolean includeImages, // Defaults to settings.includeImages below
         boolean includeHreflang, // Defaults to settings.includeHreflang below
-        boolean includeVideos // Defaults to settings.includeVideos below
+        boolean includeVideos, // Defaults to settings.includeVideos below
+        boolean writeMetadata, // Defaults to settings.writeMetadata below
+        string metadataPath, // Omitted uses settings.metadataPath; explicit empty derives from filePath
+        boolean metadataIncludeUrls // Defaults to settings.metadataIncludeUrls below
     ) {
         // Default runAsync to the module setting when the caller did not pass it.
         param name="arguments.runAsync" default="#settings.runAsync#";
@@ -85,6 +108,13 @@ component
         param name="arguments.includeImages" default="#settings.includeImages#";
         param name="arguments.includeHreflang" default="#settings.includeHreflang#";
         param name="arguments.includeVideos" default="#settings.includeVideos#";
+
+        // And the metadata sidecar options. param only supplies a default when
+        // the key is absent, so an explicitly passed empty metadataPath remains
+        // distinguishable and forces adjacent-file derivation.
+        param name="arguments.writeMetadata" default="#settings.writeMetadata#";
+        param name="arguments.metadataPath" default="#settings.metadataPath#";
+        param name="arguments.metadataIncludeUrls" default="#settings.metadataIncludeUrls#";
 
         var start = getTickCount();
 
@@ -194,13 +224,55 @@ component
             }
         }
 
+        // One duration read shared by the stats struct and the duration key
+        // below, so the two always agree.
+        var durationMs = getTickCount() - start;
+
+        // Pre-computed counts so a caller (a CMS stats screen, a job record)
+        // never has to derive them from the raw arrays below.
+        var stats = buildStats( result, setResult, durationMs );
+
+        // Optionally write the metadata sidecar. It needs a target: the explicit
+        // metadataPath, else a name derived from filePath. With neither, there
+        // is nothing sensible to write, so the flag is a quiet no-op.
+        var metadataTarget = "";
+        var metadataSaved  = false;
+        if ( arguments.writeMetadata && ( len( arguments.filePath ) || len( arguments.metadataPath ) ) ) {
+            metadataTarget = len( arguments.metadataPath )
+                ? arguments.metadataPath
+                : defaultMetadataPath( arguments.filePath );
+            var metadata = buildMetadata(
+                stats          = stats,
+                crawlResult    = result,
+                setResult      = setResult,
+                createArgs     = arguments,
+                outputFilePath = len( arguments.filePath ) ? outputFilePath : "",
+                gzip           = gzip,
+                includeUrls    = arguments.metadataIncludeUrls
+            );
+            try {
+                // saveToFile creates missing parent directories; gzip stays off
+                // so the sidecar is always plain JSON.
+                generator.saveToFile( serializeJSON( metadata ), metadataTarget, false );
+                metadataSaved = true;
+            } catch ( any e ) {
+                logger.error( "Failed to save sitemap metadata to #metadataTarget#: #e.message#", e );
+                throw(
+                    type = "sitemap-spider.MetadataSaveFailed",
+                    message = "Could not save sitemap metadata to '#metadataTarget#'",
+                    detail = e.message
+                );
+            }
+        }
+
         return {
             "pages": result.pages,
             "sitemap": setResult.xml,
             "type": setResult.type,
             "sitemaps": sitemaps,
             "sitemapCount": setResult.type == "index" ? sitemaps.len() : 1,
-            "duration": getTickCount() - start,
+            "duration": durationMs,
+            "stats": stats,
             "processedUrls": result.processedUrls,
             "badUrls": result.badUrls,
             "ignored": result.ignored,
@@ -209,8 +281,188 @@ component
             // Report the path that was actually written (with ".gz" when gzip is
             // on); empty when nothing was saved.
             "filePath": len( arguments.filePath ) ? outputFilePath : arguments.filePath,
-            "saved": saved
+            "saved": saved,
+            // Where the metadata sidecar went ("" when none was written).
+            "metadataPath": metadataTarget,
+            "metadataSaved": metadataSaved
         };
+    }
+
+    /**
+     * readMetadata
+     * Reads a metadata sidecar written by create( writeMetadata = true ) and
+     * returns the parsed struct with exists=true added. Accepts either the
+     * sidecar path itself or the sitemap filePath. A sitemap path resolves to
+     * the metadataPath module setting when configured, otherwise the default
+     * sidecar name is derived from it (".gz" stripped first). Returns
+     * { "exists": false } when the file is missing or does not hold readable
+     * JSON, so a caller's stats screen can treat "never generated" and
+     * "unreadable" the same cheap way.
+     */
+    struct function readMetadata( required string path ) {
+        // A path that is not already a sidecar is treated as the sitemap path.
+        // The configured module default wins; otherwise derive the adjacent
+        // filename. An explicit sidecar path is always read literally.
+        var target = arguments.path;
+        if ( right( target, 10 ) != ".meta.json" ) {
+            target = len( settings.metadataPath )
+                ? settings.metadataPath
+                : defaultMetadataPath( target );
+        }
+        if ( !fileExists( target ) ) {
+            return { "exists": false };
+        }
+        var raw = fileRead( target );
+        if ( !isJSON( raw ) ) {
+            logger.warn( "Sitemap metadata at #target# is not readable JSON" );
+            return { "exists": false };
+        }
+        var metadata = deserializeJSON( raw );
+        metadata[ "exists" ] = true;
+        return metadata;
+    }
+
+    /**
+     * buildStats
+     * Assembles the pre-computed counts returned as the result's stats key and
+     * recorded in the metadata sidecar:
+     *   generatedAt (ISO-8601 with offset), durationMs, urlCount (total <url>
+     *   entries across all files), sitemapCount, type ("single"|"index"),
+     *   badUrlCount, ignoredCount, redirectCount.
+     * Keys are quoted so their casing survives JSON serialization on every
+     * engine.
+     */
+    private struct function buildStats(
+        required struct crawlResult,
+        required struct setResult,
+        required numeric durationMs
+    ) {
+        return {
+            "generatedAt": iso8601( now() ),
+            "durationMs": arguments.durationMs,
+            // Every page becomes exactly one <url> entry — generateSet chunks
+            // the same array when splitting — so one count serves both types.
+            "urlCount": arguments.crawlResult.pages.len(),
+            "sitemapCount": arguments.setResult.type == "index" ? arguments.setResult.sitemaps.len() : 1,
+            "type": arguments.setResult.type,
+            "badUrlCount": structCount( arguments.crawlResult.badUrls ),
+            "ignoredCount": arguments.crawlResult.ignored.len(),
+            "redirectCount": arguments.crawlResult.redirects.len()
+        };
+    }
+
+    /**
+     * buildMetadata
+     * Assembles the sidecar struct: schemaVersion (bumped if the shape ever
+     * changes so readers can branch), the module version, the stats struct, the
+     * options the crawl effectively ran with, the written file path, and the
+     * per-child-file counts for a split set. The full badUrls and ignored lists
+     * are added only when includeUrls is true, because the sidecar's default
+     * location is next to sitemap.xml in the public webroot, where anyone can
+     * download it.
+     */
+    private struct function buildMetadata(
+        required struct stats,
+        required struct crawlResult,
+        required struct setResult,
+        required struct createArgs,
+        required string outputFilePath,
+        required boolean gzip,
+        required boolean includeUrls
+    ) {
+        // The first start URL, matching how the crawl itself picks its primary.
+        var urlArray = isArray( arguments.createArgs.url )
+            ? arguments.createArgs.url
+            : [ arguments.createArgs.url ];
+
+        var metadata = {
+            "schemaVersion": 1,
+            // In the dev harness the version is an unstamped build placeholder;
+            // the guard keeps a missing key from throwing.
+            "moduleVersion": moduleConfig.keyExists( "version" ) ? moduleConfig.version : "",
+            "stats": arguments.stats,
+            "options": {
+                "url": urlArray[ 1 ],
+                "includeImages": arguments.createArgs.includeImages,
+                "includeHreflang": arguments.createArgs.includeHreflang,
+                "includeVideos": arguments.createArgs.includeVideos,
+                // What actually happened, not what was asked for: the crawl
+                // degrades to sync when the browser is not parallel-safe.
+                "runAsync": arguments.crawlResult.runAsync,
+                "maxPages": settings.maxPages,
+                "maxDepth": settings.maxDepth,
+                "gzipOutput": arguments.gzip,
+                "lastModFormat": settings.lastModFormat,
+                // The effective values: a non-empty argument overrides the
+                // module setting for the crawl, so record whichever applied.
+                "excludePattern": len( arguments.createArgs.excludePattern )
+                    ? arguments.createArgs.excludePattern
+                    : settings.excludePattern,
+                "browserDsl": len( arguments.createArgs.browserDsl )
+                    ? arguments.createArgs.browserDsl
+                    : settings.browserDsl,
+                "userAgent": settings.userAgent
+            },
+            "filePath": arguments.outputFilePath,
+            "sitemaps": []
+        };
+
+        // For a split set, record each child file's name and URL count (not its
+        // XML — the sidecar stays small).
+        if ( arguments.setResult.type == "index" ) {
+            for ( var child in arguments.setResult.sitemaps ) {
+                metadata.sitemaps.append( {
+                    "filename": child.filename,
+                    "urlCount": child.urlCount
+                } );
+            }
+        }
+
+        if ( arguments.includeUrls ) {
+            metadata[ "badUrls" ] = arguments.crawlResult.badUrls;
+            metadata[ "ignored" ] = arguments.crawlResult.ignored;
+        }
+
+        return metadata;
+    }
+
+    /**
+     * defaultMetadataPath
+     * Returns the sidecar path derived from a sitemap path: the sitemap path
+     * with any trailing ".gz" removed, plus ".meta.json". So "sitemap.xml" and
+     * "sitemap.xml.gz" both map to "sitemap.xml.meta.json", which is what lets
+     * readMetadata accept either form.
+     */
+    private string function defaultMetadataPath( required string sitemapPath ) {
+        var base = arguments.sitemapPath;
+        if ( right( base, 3 ) == ".gz" ) {
+            base = left( base, len( base ) - 3 );
+        }
+        return base & ".meta.json";
+    }
+
+    /**
+     * iso8601
+     * Formats a date as an ISO-8601 timestamp with the server's UTC offset
+     * (e.g. "2026-07-29T14:03:22-07:00"), so generatedAt is written as a plain
+     * string that round-trips through the JSON sidecar unchanged. Built from
+     * CFML date-part functions via java.time, the same approach as
+     * SitemapGenerator.formatLastMod's datetime path, because it behaves the
+     * same on Adobe, Lucee, and BoxLang.
+     */
+    private string function iso8601( required date value ) {
+        var ldt = createObject( "java", "java.time.LocalDateTime" ).of(
+            javaCast( "int", year( arguments.value ) ),
+            javaCast( "int", month( arguments.value ) ),
+            javaCast( "int", day( arguments.value ) ),
+            javaCast( "int", hour( arguments.value ) ),
+            javaCast( "int", minute( arguments.value ) ),
+            javaCast( "int", second( arguments.value ) )
+        );
+        var zone = createObject( "java", "java.time.ZoneId" ).systemDefault();
+        var fmt  = createObject( "java", "java.time.format.DateTimeFormatter" )
+            .ofPattern( javaCast( "string", "yyyy-MM-dd'T'HH:mm:ssxxx" ) );
+        return ldt.atZone( zone ).toOffsetDateTime().format( fmt );
     }
 
     /**

@@ -211,17 +211,91 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
                 expect( xml ).notToInclude( "<image:image>" );
             } );
 
+            it( "stores the stats struct on a completed job record", function(){
+                var jobId = queueSampleCrawl();
+
+                var job = waitForTerminal( jobId );
+                expect( job.status ).toBe( "completed" );
+                expect( job.result ).toHaveKey( "stats" );
+                expect( job.result.stats.urlCount ).toBeGT( 0 );
+                expect( job.result.stats ).toHaveKey( "generatedAt,durationMs,badUrlCount" );
+                // Metadata was not asked for, so nothing extra was written.
+                expect( job.result.metadataSaved ).toBeFalse();
+            } );
+
+            it( "passes writeMetadata through so a queued job writes the sidecar", function(){
+                var sitemapPath = tempFile();
+                // Track the sidecar for cleanup too.
+                variables.createdFiles.append( sitemapPath & ".meta.json" );
+
+                var jobId = variables.registry.queue(
+                    url           = variables.appRoot,
+                    filePath      = sitemapPath,
+                    writeMetadata = true
+                );
+                variables.createdJobs.append( jobId );
+
+                var job = waitForTerminal( jobId );
+                expect( job.status ).toBe( "completed" );
+                expect( job.result.metadataSaved ).toBeTrue();
+                expect( job.result.metadataPath ).toBe( sitemapPath & ".meta.json" );
+                expect( fileExists( job.result.metadataPath ) ).toBeTrue();
+            } );
+
+            it( "snapshots the module metadataPath when the job is queued", function(){
+                var settings       = getInstance( "coldbox:moduleSettings:sitemap-spider" );
+                var savedPath      = settings.metadataPath;
+                var configuredPath = variables.tempDir & createUUID() & ".meta.json";
+                var laterPath      = variables.tempDir & createUUID() & ".meta.json";
+                variables.createdFiles.append( configuredPath );
+                variables.createdFiles.append( laterPath );
+
+                settings.metadataPath = configuredPath;
+                try {
+                    var jobId = variables.registry.queue(
+                        url           = variables.appRoot,
+                        filePath      = tempFile(),
+                        writeMetadata = true
+                    );
+                    variables.createdJobs.append( jobId );
+
+                    // Changing the setting after queue() must not move this job.
+                    settings.metadataPath = laterPath;
+                    var queued = variables.registry.getJob( jobId );
+                    expect( queued.metadataPath ).toBe( configuredPath );
+
+                    var job = waitForTerminal( jobId );
+                    expect( job.status ).toBe( "completed" );
+                    expect( job.result.metadataPath ).toBe( configuredPath );
+                    expect( fileExists( configuredPath ) ).toBeTrue();
+                    expect( fileExists( laterPath ) ).toBeFalse();
+                } finally {
+                    settings.metadataPath = savedPath;
+                }
+            } );
+
             it( "falls back to the module setting for a record queued before the flags existed", function(){
                 // A record a persistent store was already holding when the host
                 // upgraded has no include* keys, so runJob reads them through
                 // recordFlag rather than straight off the record.
                 var registry = prepareMock( getInstance( "SitemapJobRegistry@sitemap-spider" ) );
                 makePublic( registry, "recordFlag" );
+                makePublic( registry, "recordMetadataPath" );
                 var settings = getInstance( "coldbox:moduleSettings:sitemap-spider" );
+                var savedPath = settings.metadataPath;
+                settings.metadataPath = "/private/configured.meta.json";
 
-                expect( registry.recordFlag( {}, "includeVideos" ) ).toBe( settings.includeVideos );
-                expect( registry.recordFlag( { "includeVideos" : true }, "includeVideos" ) ).toBeTrue();
-                expect( registry.recordFlag( { "includeVideos" : false }, "includeVideos" ) ).toBeFalse();
+                try {
+                    expect( registry.recordFlag( {}, "includeVideos" ) ).toBe( settings.includeVideos );
+                    expect( registry.recordFlag( { "includeVideos" : true }, "includeVideos" ) ).toBeTrue();
+                    expect( registry.recordFlag( { "includeVideos" : false }, "includeVideos" ) ).toBeFalse();
+                    expect( registry.recordMetadataPath( {} ) ).toBe( settings.metadataPath );
+                    expect( registry.recordMetadataPath( { "metadataPath" : "" } ) ).toBe( "" );
+                    expect( registry.recordMetadataPath( { "metadataPath" : "/job.meta.json" } ) )
+                        .toBe( "/job.meta.json" );
+                } finally {
+                    settings.metadataPath = savedPath;
+                }
             } );
 
             it( "tells the host app when a job finishes", function(){
