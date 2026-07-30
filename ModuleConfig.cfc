@@ -57,6 +57,11 @@ component {
             // jobStoreDsl: WireBox DSL of the IJobStore that holds job records. The
             //   default keeps them in memory (lost on a server restart or reinit).
             //   Point this at a durable IJobStore to keep records across restarts.
+            //   The store also reports, through its isShared() method, whether more
+            //   than one app server reads the same records. That answer decides
+            //   whether the two background timers below run at all: with the default
+            //   store they never do, because neither can accomplish anything for a
+            //   single server.
             jobStoreDsl : "InMemoryJobStore@sitemap-spider",
             // maxConcurrentJobs: how many queued crawls run at once. It is the size
             //   of the registry's fixed thread pool; extra jobs wait as "queued"
@@ -75,21 +80,30 @@ component {
             //   shares one job store: the boot sweep uses it to tell its own
             //   leftover jobs from another server's live ones.
             jobNodeId : "",
+            // The next four only apply when the job store reports isShared() true.
+            // With the default in-memory store the tasks they configure never run,
+            // so changing these does nothing until jobStoreDsl points at a store
+            // several app servers share.
+            //
             // jobHeartbeatSeconds: how often a running job writes its counters and
             //   a "still alive" timestamp to the store. This is what lets a
             //   dashboard show progress for a job running elsewhere, and what the
             //   stale check reads to notice a job whose process died.
-            jobHeartbeatSeconds : 15,
+            jobHeartbeatSeconds : 30,
             // jobStaleSeconds: how old a job's last heartbeat must be before it is
             //   treated as dead and marked interrupted. Keep it several times
             //   jobHeartbeatSeconds so a slow garbage collection pause never kills
             //   a healthy job.
-            jobStaleSeconds : 90,
-            // jobReaperEnabled: turns off the background task that marks dead jobs
-            //   interrupted. Leave it on unless another process handles cleanup.
+            jobStaleSeconds : 180,
+            // jobReaperEnabled: a second off-switch for the task that marks dead
+            //   jobs interrupted, on top of the store's own isShared() answer.
+            //   Setting it false stops that task even on a shared store, for a host
+            //   where something outside the app handles cleanup. Setting it true
+            //   does not switch the task on for an unshared store.
             jobReaperEnabled : true,
-            // jobReaperIntervalSeconds: how often that cleanup task runs.
-            jobReaperIntervalSeconds : 60,
+            // jobReaperIntervalSeconds: how often that cleanup task runs. Worst-case
+            //   time to notice a dead job is this plus jobStaleSeconds.
+            jobReaperIntervalSeconds : 120,
             respectRobotsTxt : true, // fetch and honor robots.txt Disallow/Allow rules
             // When true (default), a page carrying <meta name="robots" content="noindex">
             // or an X-Robots-Tag: noindex response header is left out of the

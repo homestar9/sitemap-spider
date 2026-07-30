@@ -30,8 +30,34 @@
  *
  * status is one of: queued, running, completed, failed, canceled, interrupted.
  * The last four are terminal.
+ *
+ * isShared() decides whether the module runs its two background timers at all.
+ * Say false unless more than one app server reads the same records; see that
+ * method for what each answer switches on and off.
  */
 interface {
+
+	/**
+	 * True when more than one app server can see these records.
+	 *
+	 * The module asks once per timer tick, and skips both the heartbeat task and
+	 * the dead-job task when the answer is false. Neither does anything useful
+	 * for a single server: it reads its own live counters straight out of memory
+	 * rather than from the store, and it cleans up its own leftover rows at boot
+	 * by matching bootId in findOrphaned(). Only another server's crash needs a
+	 * heartbeat to notice.
+	 *
+	 * Say false for a store just one server reaches, even a durable one — a
+	 * SQLite file or a database only this app connects to. Say true when several
+	 * app servers point at one database and share the job queue between them.
+	 *
+	 * Answering true when it is not costs a store write per running job every
+	 * jobHeartbeatSeconds plus a findStale() query every
+	 * jobReaperIntervalSeconds, for no benefit. Answering false when it should
+	 * be true means a job left running by a crashed server stays "running" until
+	 * that server comes back and its boot sweep clears it.
+	 */
+	boolean function isShared();
 
 	/**
 	 * Saves a job record, inserting it or replacing the one with the same id.

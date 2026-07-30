@@ -17,6 +17,10 @@ component {
 		return this;
 	}
 
+	boolean function isShared(){
+		throw( type = "BrokenJobStore.Failure", message = "isShared failed" );
+	}
+
 	boolean function save(
 		required string jobId,
 		required struct record,

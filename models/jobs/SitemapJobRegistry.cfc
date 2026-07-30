@@ -1,5 +1,12 @@
 component
 	singleton
+	// threadsafe stops WireBox putting this object in its singleton cache before
+	// onDiComplete() has run. Without it, a background task calling getInstance()
+	// while another thread is still wiring this one gets a copy that has no store
+	// and no progressMap yet, and every method below blows up. Nothing injects
+	// this component into anything else, so no circular dependency needs the
+	// early publish that dropping this attribute would restore.
+	threadsafe
 	accessors=true
 	hint     ="Runs sitemap crawls as background jobs and tracks their progress"
 {
@@ -53,6 +60,39 @@ component
 		variables.nodeId  = len( settings.jobNodeId ) ? settings.jobNodeId : resolveHostName();
 		variables.bootId  = createUUID();
 		variables.ownerId = variables.nodeId & ":" & variables.bootId;
+	}
+
+	/**
+	 * True once onDiComplete() has run and the store and counters exist.
+	 *
+	 * The background methods below check this before doing anything. A scheduled
+	 * task can fire while WireBox is still building this singleton — right after
+	 * a framework reinit, for example — and skipping that tick is the right
+	 * answer, because the next one runs against a finished object. Throwing
+	 * instead would put a stacktrace in the host's log for something that fixes
+	 * itself in seconds.
+	 *
+	 * The threadsafe attribute on this component should stop that from happening
+	 * at all. This is the second line of defence, and it matters because the
+	 * scheduler asks usesSharedStore() from a .when() constraint, where ColdBox
+	 * does not catch errors — see config/Scheduler.cfc.
+	 */
+	private boolean function isReady(){
+		return variables.keyExists( "store" ) && variables.keyExists( "progressMap" );
+	}
+
+	/**
+	 * True when the job store is shared between app servers.
+	 *
+	 * The scheduler asks before each run of the heartbeat and dead-job tasks,
+	 * because neither does anything useful for a single server. See
+	 * IJobStore.isShared() for what the answer switches on and off.
+	 *
+	 * Returns false while this object is still being wired, so a task firing
+	 * mid-reinit skips its turn rather than throwing.
+	 */
+	boolean function usesSharedStore(){
+		return isReady() && variables.store.isShared();
 	}
 
 	/**
@@ -365,9 +405,13 @@ component
 	 * Only jobs running on this server are in progressMap, so this only ever
 	 * reports on its own work.
 	 *
-	 * @return How many jobs were reported on.
+	 * @return How many jobs were reported on. 0 when this object is not wired yet.
 	 */
 	numeric function heartbeatRunningJobs(){
+		if ( !isReady() ) {
+			return 0;
+		}
+
 		var count    = 0;
 		var iterator = variables.progressMap.entrySet().iterator();
 		while ( iterator.hasNext() ) {
@@ -390,9 +434,14 @@ component
 	 * killed server, an out-of-memory, a stopped container. Nothing runs in those
 	 * cases, so this check is the only way those jobs ever stop looking active.
 	 *
-	 * @return How many jobs were marked interrupted.
+	 * @return How many jobs were marked interrupted. 0 when this object is not
+	 *   wired yet.
 	 */
 	numeric function reapStaleJobs(){
+		if ( !isReady() ) {
+			return 0;
+		}
+
 		var count = 0;
 		for ( var record in variables.store.findStale( settings.jobStaleSeconds ) ) {
 			if ( markInterrupted( record, "no progress reported for #settings.jobStaleSeconds# seconds" ) ) {
@@ -413,9 +462,14 @@ component
 	 * With the in-memory store this finds nothing, because the records went away
 	 * with the restart too.
 	 *
-	 * @return How many jobs were marked interrupted.
+	 * @return How many jobs were marked interrupted. 0 when this object is not
+	 *   wired yet.
 	 */
 	numeric function sweepOrphanedJobs(){
+		if ( !isReady() ) {
+			return 0;
+		}
+
 		var count = 0;
 		for ( var record in variables.store.findOrphaned( variables.nodeId, variables.bootId ) ) {
 			if ( markInterrupted( record, "the app restarted while this job was running" ) ) {
@@ -565,9 +619,14 @@ component
 	 * Nothing in here is allowed to throw: ModuleConfig.onUnload() calls it, and an
 	 * error escaping that would make ColdBox tear down the whole application.
 	 *
-	 * @return How many running jobs were marked interrupted.
+	 * @return How many running jobs were marked interrupted. 0 when this object
+	 *   is not wired yet, in which case it never queued anything either.
 	 */
 	numeric function shutdown(){
+		if ( !isReady() ) {
+			return 0;
+		}
+
 		var count = 0;
 
 		try {

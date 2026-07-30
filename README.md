@@ -167,10 +167,18 @@ These apply only to background jobs (see [Background jobs](#background-jobs)):
 | `maxRetainedJobs` | `100` | How many finished job records to keep. The oldest are dropped past this. `0` or less keeps everything. |
 | `jobStoreDsl` | `"InMemoryJobStore@sitemap-spider"` | Where job records are kept. The default keeps them in memory, so they are lost on a restart. Point it at your own `IJobStore` to keep them. |
 | `jobNodeId` | `""` (empty) | Names this app server in job records. Empty uses the machine's host name. Only matters when several servers share one job store. |
-| `jobHeartbeatSeconds` | `15` | How often a running job writes its counters and a "still alive" timestamp to the store. |
-| `jobStaleSeconds` | `90` | How long a job can go without reporting progress before it is treated as dead and marked `interrupted`. Keep it several times `jobHeartbeatSeconds` so a slow garbage-collection pause never kills a healthy job. |
-| `jobReaperEnabled` | `true` | Whether the background task that marks dead jobs `interrupted` runs. |
-| `jobReaperIntervalSeconds` | `60` | How often that task runs. |
+
+The next four only do anything when your job store reports `isShared()` as
+`true`. With the default in-memory store the tasks they configure never run, so
+changing them has no effect — see
+[Background upkeep](#what-happens-when-the-app-restarts-or-crashes).
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `jobHeartbeatSeconds` | `30` | How often a running job writes its counters and a "still alive" timestamp to the store. |
+| `jobStaleSeconds` | `180` | How long a job can go without reporting progress before it is treated as dead and marked `interrupted`. Keep it several times `jobHeartbeatSeconds` so a slow garbage-collection pause never kills a healthy job. |
+| `jobReaperEnabled` | `true` | A second off-switch for the task that marks dead jobs `interrupted`. `false` stops it even on a shared store; `true` does not switch it on for an unshared one. |
+| `jobReaperIntervalSeconds` | `120` | How often that task runs. Worst case time to notice a dead job is this plus `jobStaleSeconds`. |
 
 ## Browser backends
 
@@ -517,9 +525,30 @@ you can decide whether to run it again.
 | App restarted, durable store in use | At startup, jobs left `running` by the previous start are recognised by their boot id and marked `interrupted` immediately |
 
 That upkeep runs automatically — `config/Scheduler.cfc` ships with the module and
-needs no wiring. It writes each running job's counters to the store every
-`jobHeartbeatSeconds`, which is also what makes progress visible for a job running
-on another server. Set `jobReaperEnabled = false` to turn the cleanup off.
+needs no wiring. It registers three tasks, and how many of them actually run
+depends on your job store:
+
+| Task | When it runs | What it does |
+| --- | --- | --- |
+| Startup sweep | Once, shortly after every boot | Marks jobs left `running` by this server's previous start as `interrupted`, matching on boot id |
+| Heartbeat | Every `jobHeartbeatSeconds`, **shared stores only** — otherwise not registered | Writes each running job's counters and a "still alive" timestamp to the store |
+| Dead-job check | Every `jobReaperIntervalSeconds`, **shared stores only** — otherwise not registered | Marks jobs that stopped reporting progress as `interrupted` |
+
+The last two only apply when your store's `isShared()` returns `true`, meaning
+more than one app server reads the same records. With the default in-memory
+store — and with a durable store only one server reaches — they are not
+registered at all: the module asks the store once while it loads, and skips
+handing either task to the scheduler. Nothing is scheduled and no thread ever
+wakes for them.
+
+They can be switched off because neither can achieve anything for a single
+server. It reads its own live counters straight out of memory rather than from
+the store, and the startup sweep already cleans up its own leftover rows. So a
+default install does no background work at all.
+
+If several app servers do share one store, have `isShared()` return `true` and
+both tasks are registered and run. Because the answer is read while the module
+loads, changing `jobStoreDsl` needs a reinit to take effect.
 
 ### Keeping job records
 
@@ -537,8 +566,17 @@ moduleSettings = {
 
 The interface is small, and the counters that change constantly during a crawl
 never reach it — a store only sees status changes and a heartbeat, so a few writes
-per job. Two methods carry the important rules:
+per job. Three methods carry the important rules:
 
+- **`isShared()`** answers whether more than one app server can see these records,
+  and decides whether the heartbeat and dead-job tasks run at all. Return `false`
+  for a store only one server reaches, even a durable one such as a SQLite file.
+  Return `true` when several app servers point at one database and share the job
+  queue. Saying `true` when it is not costs a store write per running job every
+  `jobHeartbeatSeconds` plus a `findStale()` query every
+  `jobReaperIntervalSeconds`, for nothing. Saying `false` when it should be `true`
+  means a job left behind by a crashed server stays `running` until that server
+  comes back and its startup sweep clears it.
 - **`claim()`** must move a job from `queued` to `running` for exactly one caller.
   With a database that is a conditional update
   (`... set status = 'running' where id = ? and status = 'queued'`) checking that

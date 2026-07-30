@@ -33,6 +33,21 @@ component
 	}
 
 	/**
+	 * Always false: these records live in one app server's memory, so no other
+	 * server can see them.
+	 *
+	 * That answer switches off the heartbeat and dead-job timers, which is
+	 * correct here rather than merely cheap. A heartbeat only exists so another
+	 * server can watch a job, and getJob() reads this server's own counters
+	 * live from memory instead. The dead-job check could never find anything
+	 * either: a record only goes stale when the heartbeat task stops, and that
+	 * task shares an executor with the dead-job task, so both stop together.
+	 */
+	boolean function isShared(){
+		return false;
+	}
+
+	/**
 	 * Inserts or replaces the record for a job id.
 	 *
 	 * With expectedOwnerId passed, the record is only written if the stored one

@@ -160,6 +160,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `IJobStore` gained an `isShared()` method. A custom job store
+  must add `boolean function isShared()` or it will no longer instantiate.
+  Return `false` for a store only one app server reaches, even a durable one;
+  return `true` when several app servers read the same records. The answer
+  decides whether the module's two background timer tasks run at all.
+- The heartbeat and dead-job tasks now only apply to a store that reports
+  `isShared()` as `true`, and when it does not they are never registered with the
+  scheduler: the module asks the store once while it loads, and skips handing
+  either task to the executor. Nothing is scheduled and no thread wakes on an
+  interval. Neither task could achieve anything otherwise: a single server reads
+  its own live counters straight out of memory rather than from the store, and
+  the once-per-boot startup sweep already clears rows its own previous start
+  left behind. With the default `InMemoryJobStore` the dead-job check could never
+  have found anything at all, because a record only goes stale when the heartbeat
+  task stops, and both tasks share one executor. So a default install now does no
+  background work. The startup sweep still always runs, which is what a durable
+  single-server store needs. Because the store is asked while the module loads,
+  changing `jobStoreDsl` needs a reinit to take effect.
+- Default `jobHeartbeatSeconds` is now `30` (was `15`), `jobStaleSeconds` `180`
+  (was `90`), and `jobReaperIntervalSeconds` `120` (was `60`). A crawl runs for
+  minutes, so the old intervals were tuned tighter than anything needed. These
+  only apply to a shared store now.
+- `jobReaperEnabled` is now a second off-switch on top of the store's own
+  `isShared()` answer, rather than the only one. Setting it `false` still stops
+  the dead-job task on a shared store; setting it `true` no longer switches that
+  task on for an unshared store.
 - License changed from MIT to the
   [PolyForm Perimeter License 1.0.1](https://polyformproject.org/licenses/perimeter/1.0.1).
   You can still use sitemap-spider in personal and commercial website projects,
@@ -197,6 +223,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A rejected start or seed URL is now reported in `ignored` with its reason
   (`"excluded"`, `"disallowed"`, or the new `"notAllowed"`), instead of only being
   logged.
+
+### Fixed
+
+- Two stacktraces on every `?fwreinit=true`, reading
+  `has no accessible Member with name [PROGRESSMAP]` or `[STORE]`. WireBox puts a
+  singleton in its cache before wiring it, so that circular dependencies can
+  resolve, which meant a scheduled task firing during a reinit could fetch a
+  `SitemapJobRegistry` whose `onDiComplete()` had not run yet. Both timer tasks
+  fired at once because neither had a startup delay. `SitemapJobRegistry` is now
+  marked `threadsafe`, so WireBox only publishes it once wiring has finished;
+  its background methods return `0` rather than throwing if they are somehow
+  called earlier; and the timer tasks are staggered so neither starts during the
+  reinit. It self-healed on the next tick before, but put two stacktraces in the
+  log each time.
+- A failing scheduled task logged a second, misleading stacktrace
+  (`No matching function [ERR] found`) instead of the intended one-line message.
+  The failure handlers in `config/Scheduler.cfc` called `err()`, and the startup
+  and dead-job tasks called `out()`, but both belong to `ScheduledTask` rather
+  than to a scheduler, so neither resolved. `out()` could never have worked at
+  all, because ColdBox calls a task closure with no arguments. They now use the
+  LogBox logger ColdBox injects into the scheduler as `log`. This affected every
+  engine, not just Lucee.
 
 ### Removed
 
