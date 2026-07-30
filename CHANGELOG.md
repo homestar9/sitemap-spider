@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+----
+
+## [1.0.0] - 2026-07-30
+
+First stable release. The module crawls a site breadth-first from one or more
+start URLs and generates a sitemaps.org XML sitemap.
+
 ### Added
 
 - A pre-computed `stats` struct on the `create()` result and on completed job
@@ -157,6 +164,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `redirects` key in the crawl result: one `{ from, to, chain }` entry per fetched
   URL that followed an HTTP redirect. `from` is the requested URL, `to` is the
   final URL, and `chain` lists each hop as `{ url, status }`.
+- Parallel crawling. `runAsync` (setting and per-crawl argument, default
+  `false`) fetches URLs on `asyncMaxThreads` worker threads (default `10`) when
+  the browser backend is parallel-safe. A `robots.txt` `Crawl-delay` is still
+  honored by spacing fetches across the workers.
+- Breadth-first crawler with configurable `maxDepth` and `maxPages`.
+- `robots.txt` support: fetches and honors `Disallow` / `Allow` rules, selects
+  the matching `User-agent` group, and applies `Crawl-delay` up to `maxCrawlDelay`.
+- Redirect handling for HTTP redirects and `<meta>` refresh, with the final URL
+  recorded once.
+- Configurable browser backend selected by the `browserDsl` setting: jsoup
+  (default, static HTML) or cbPlaywright (`Playwright@sitemap-spider`) for
+  JavaScript-rendered pages, with `waitStrategy` / `waitMs` controls.
+- W3C `<lastmod>` output (date-only), with a `lastModFallback` setting to omit
+  the element or use the crawl time when a page has no Last-Modified.
+- Save-to-file via `create( ..., filePath = )`, creating the directory as needed
+  and throwing `sitemap-spider.SaveFailed` on a write error.
+- Sitemap index splitting: when a crawl exceeds `maxUrlsPerSitemap` (50000) or
+  `maxSitemapBytes` (50 MiB), the output becomes a `<sitemapindex>` plus numbered
+  child `<urlset>` files, with an optional `publicBaseUrl` for the index entries.
+- Unit, integration, and contract test coverage under `test-harness`.
 
 ### Changed
 
@@ -223,6 +250,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A rejected start or seed URL is now reported in `ignored` with its reason
   (`"excluded"`, `"disallowed"`, or the new `"notAllowed"`), instead of only being
   logged.
+- Consolidated the fetch layer behind the `IBrowser` interface and removed the
+  old `cfhttp` backend (jsoup covers static fetching).
+- Refactored the crawler's bookkeeping to O(1) struct lookups, replacing the
+  previous O(n) scans.
 
 ### Fixed
 
@@ -245,50 +276,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all, because ColdBox calls a task closure with no arguments. They now use the
   LogBox logger ColdBox injects into the scheduler as `log`. This affected every
   engine, not just Lucee.
+- Removed leftover `writeDump` debug output that corrupted responses and test runs.
+- Corrected the URL filter's inverted `reMatch` arguments.
+- Reset crawler state at the start of each crawl so a reused (cached) instance no
+  longer carries pages over from a previous crawl.
 
 ### Removed
 
 - **Breaking:** the `disallowedUrls` array is gone from the crawl result. URLs
   skipped by `robots.txt` are reported in `ignored` with reason `"disallowed"`,
   which already carried them, so the separate array was redundant.
-
-----
-
-## [1.0.0] - 2026-07-21
-
-First stable release. The module crawls a site breadth-first from one or more
-start URLs and generates a sitemaps.org XML sitemap.
-
-### Added
-
-- Breadth-first crawler with configurable `maxDepth` and `maxPages`.
-- `robots.txt` support: fetches and honors `Disallow` / `Allow` rules, selects
-  the matching `User-agent` group, and applies `Crawl-delay` up to `maxCrawlDelay`.
-- Redirect handling for HTTP redirects and `<meta>` refresh, with the final URL
-  recorded once.
-- Configurable browser backend selected by the `browserDsl` setting: jsoup
-  (default, static HTML) or cbPlaywright (`Playwright@sitemap-spider`) for
-  JavaScript-rendered pages, with `waitStrategy` / `waitMs` controls.
-- W3C `<lastmod>` output (date-only), with a `lastModFallback` setting to omit
-  the element or use the crawl time when a page has no Last-Modified.
-- Save-to-file via `create( ..., filePath = )`, creating the directory as needed
-  and throwing `sitemap-spider.SaveFailed` on a write error.
-- Sitemap index splitting: when a crawl exceeds `maxUrlsPerSitemap` (50000) or
-  `maxSitemapBytes` (50 MiB), the output becomes a `<sitemapindex>` plus numbered
-  child `<urlset>` files, with an optional `publicBaseUrl` for the index entries.
-- Unit, integration, and contract test coverage under `test-harness`.
-
-### Changed
-
-- Consolidated the fetch layer behind the `IBrowser` interface and removed the
-  old `cfhttp` backend (jsoup covers static fetching).
-- Refactored the crawler to synchronous-only for v1, with O(1) struct lookups
-  replacing the previous O(n) scans. Async crawling is planned for a later
-  release.
-
-### Fixed
-
-- Removed leftover `writeDump` debug output that corrupted responses and test runs.
-- Corrected the URL filter's inverted `reMatch` arguments.
-- Reset crawler state at the start of each crawl so a reused (cached) instance no
-  longer carries pages over from a previous crawl.

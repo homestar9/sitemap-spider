@@ -131,12 +131,15 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `browserDsl` | `"Jsoup@sitemap-spider"` | Which browser backend fetches each URL. Set to `"Playwright@sitemap-spider"` for JavaScript rendering. |
 | `maxDepth` | `10` | Maximum link distance from a start URL to crawl. |
 | `maxPages` | `1000` | Maximum number of pages to record in one crawl. |
+| `runAsync` | `false` | Default crawl mode. When true — and the browser backend is parallel-safe — URLs are fetched on `asyncMaxThreads` worker threads. A `robots.txt` `Crawl-delay` is still honored by spacing fetches across the workers. The `create()` `runAsync` argument overrides this setting for a single crawl. |
+| `asyncMaxThreads` | `10` | Worker thread count for a parallel crawl. Only used when `runAsync` is on. |
 | `respectRobotsTxt` | `true` | When true, fetches `robots.txt` and honors its prefix-matched `Disallow` / `Allow` rules and `Crawl-delay`. A trailing slash is significant: `/admin/` does not match `/admin`. |
 | `respectNoIndex` | `true` | When true, a page carrying `<meta name="robots" content="noindex">` (or `none`) or an `X-Robots-Tag: noindex` response header is left out of the sitemap and reported in `ignored` with reason `"noindex"`. Its links are still followed, because `noindex` does not mean `nofollow`. An agent-scoped header directive (`googlebot: noindex`) counts as a global one on purpose. `false` lists such pages anyway. |
 | `userAgent` | `"sitemap-spider"` | Sent on every fetch, and matched against `robots.txt` `User-agent` groups. |
 | `maxCrawlDelay` | `10` | Upper cap, in seconds, on the `robots.txt` `Crawl-delay` actually applied between fetches. A `Crawl-delay` no longer forces a single-threaded crawl: a parallel crawl still honors it by spacing fetches this far apart across the workers. |
 | `notAllowedPattern` | `\.(png\|webp\|svg\|gif\|js\|css\|jpg\|jpeg)$\|javascript:\|mailto:\|tel:` | Links matching this regex are never crawled (asset files and non-HTTP schemes). |
 | `excludePattern` | `""` (empty) | Regex matched case-insensitively against the full URL for whole-section excludes (e.g. `/admin(?:/|\?|$)`). A match skips the URL and reports it in `ignored` with reason `"excluded"`. Separate from the per-crawl exact-URL `excludeUrls` argument. Empty means no pattern exclusion. The `create()` `excludePattern` argument overrides this setting for a single crawl. |
+| `sessionParams` | `cfid,cftoken,jsessionid,utm_source,...` | Query-param and `;jsessionid` path-param names stripped during URL normalization, so session tokens and tracking params never reach dedup keys or the sitemap. Matched case-insensitively. The full default list also covers `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `fbclid`, and `gclid`. |
 | `priority` | `1.0` | `<priority>` assigned to the start URL. |
 | `priorityDecrement` | `0.1` | How much `<priority>` drops per level of depth. |
 | `maxUrlsPerSitemap` | `50000` | sitemaps.org per-file URL limit. Above this the output splits into a sitemap index. |
@@ -590,23 +593,6 @@ Two things stay your responsibility with a durable store: jobs still sitting in
 `queued` when the app stops are not picked back up automatically (the in-process
 pool queue went away with it, so re-queue them at startup), and deciding whether
 to retry an `interrupted` job — the record's `attempts` count is there to cap it.
-
-## Releasing (maintainers)
-
-Releases are manual (there is no CI). To cut and publish a new version:
-
-1. Bump `version` in `box.json` (semver: patch for fixes, minor for additive
-   features, major for breaking changes).
-2. Roll the changelog: rename the `[Unreleased]` section in `changelog.md` to the
-   new version with today's date, and start a fresh empty `[Unreleased]` above it.
-3. Run `box run-script release`. This builds the module (stamping the box.json
-   version into `ModuleConfig.cfc`'s `this.version`) and publishes the stamped
-   package to ForgeBox. It runs `release.boxr` under the hood.
-4. Commit the version and changelog bumps, then tag: `git tag v<version>`.
-
-`box run-script build:module` on its own produces the release artifact under
-`.artifacts/sitemap-spider/<version>/` (a version-stamped zip plus `.sha512` and
-`.md5` checksums) without publishing — handy for inspecting a build first.
 
 ## Third-party software
 

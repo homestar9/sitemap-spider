@@ -13,7 +13,7 @@
     "shortDescription":"A simple sitemap generator for ColdBox applications",
     "slug":"sitemap-spider",
     "type":"modules",
-    "keywords":"",
+    "keywords":"sitemap,seo,crawler,spider,coldbox,xml",
     "license":[
         {
             "type":"PolyForm-Perimeter-1.0.1",
@@ -36,7 +36,6 @@
         "/server*.json",
         "build",
         "plans",
-        "release.boxr",
         "sitemap-spider.code-workspace",
         "AGENTS.md",
         "CLAUDE.md"
