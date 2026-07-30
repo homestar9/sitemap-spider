@@ -74,6 +74,25 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 	}
 
 	/**
+	 * crawlBrokenAssets
+	 *
+	 * Crawls the broken-assets fixture with asset checking turned on and returns
+	 * the result. checkAssets is restored afterwards so the other specs still see
+	 * the module default.
+	 */
+	private struct function crawlBrokenAssets(){
+		var settings = getInstance( "coldbox:moduleSettings:sitemap-spider" );
+		var saved    = settings.checkAssets;
+		settings.checkAssets = true;
+		try {
+			return getInstance( "sitemapService@sitemap-spider" )
+				.create( variables.appRoot & "broken-assets.cfm" );
+		} finally {
+			settings.checkAssets = saved;
+		}
+	}
+
+	/**
 	 * pageUrls
 	 *
 	 * Returns the URL from each page struct.
@@ -168,6 +187,100 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 				for ( var badUrl in variables.result.badUrls ) {
 					expect( variables.result.badUrls[ badUrl ] ).toHaveKey( "message" );
 				}
+			} );
+
+			it( "records the real status code and reason for a failed page", function(){
+				var missingUrl = variables.appRoot & "missing.cfm";
+
+				// The engine handles every request under this mapping, so a file that
+				// is missing from disk returns 500 rather than 404.
+				expect( variables.result.badUrls[ missingUrl ].status ).toBe( 500 );
+				expect( variables.result.badUrls[ missingUrl ].reason ).toBe( "serverError" );
+				expect( variables.result.badUrls[ missingUrl ].kind ).toBe( "page" );
+			} );
+
+			it( "names the page the broken link was found on", function(){
+				var missingUrl = variables.appRoot & "missing.cfm";
+
+				// index.cfm is the only page linking to missing.cfm.
+				expect( variables.result.badUrls[ missingUrl ].foundOn ).toBe( [ variables.appRoot ] );
+			} );
+
+		} );
+
+		describe( "asset checking against the sample site", function(){
+
+			// broken-assets.cfm is not linked from any reachable page, so seeding it
+			// directly leaves the shared baseline crawl in beforeAll untouched.
+
+			it( "reports a missing image, stylesheet, and script as broken assets", function(){
+				var result = crawlBrokenAssets();
+
+				expect( result.badUrls ).toHaveKey( variables.appRoot & "assets/img/missing.png" );
+				expect( result.badUrls ).toHaveKey( variables.appRoot & "assets/css/missing.css" );
+				expect( result.badUrls ).toHaveKey( variables.appRoot & "assets/js/missing.js" );
+
+				var missingImage = result.badUrls[ variables.appRoot & "assets/img/missing.png" ];
+				expect( missingImage.kind ).toBe( "asset" );
+				// A file missing from disk returns 500 here, not 404.
+				expect( missingImage.status ).toBe( 500 );
+				expect( missingImage.reason ).toBe( "serverError" );
+				expect( missingImage.foundOn ).toBe( [ variables.appRoot & "broken-assets.cfm" ] );
+			} );
+
+			it( "reports an asset that returns a real 404 as notFound", function(){
+				var result = crawlBrokenAssets();
+
+				var goneImage = result.badUrls[ variables.appRoot & "gone-image.cfm" ];
+				expect( goneImage.kind ).toBe( "asset" );
+				expect( goneImage.status ).toBe( 404 );
+				expect( goneImage.reason ).toBe( "notFound" );
+			} );
+
+			it( "reports a page that returns a real 404 as notFound", function(){
+				var result = crawlBrokenAssets();
+
+				var gonePage = result.badUrls[ variables.appRoot & "gone.cfm" ];
+				expect( gonePage.kind ).toBe( "page" );
+				expect( gonePage.status ).toBe( 404 );
+				expect( gonePage.reason ).toBe( "notFound" );
+				expect( gonePage.foundOn ).toBe( [ variables.appRoot & "broken-assets.cfm" ] );
+			} );
+
+			it( "reports a directly linked missing image the crawler would never fetch", function(){
+				var result = crawlBrokenAssets();
+
+				// notAllowedPattern blocks .jpg, so this link is not crawled as a page.
+				expect( result.badUrls ).toHaveKey( variables.appRoot & "assets/img/gone.jpg" );
+				expect( result.badUrls[ variables.appRoot & "assets/img/gone.jpg" ].kind ).toBe( "asset" );
+			} );
+
+			it( "leaves working and off-host assets out of badUrls", function(){
+				var result = crawlBrokenAssets();
+
+				// This image exists.
+				expect( result.badUrls ).notToHaveKey( variables.appRoot & "assets/img/sample.jpg" );
+				// The layout loads Bootstrap from a CDN, which is out of scope.
+				for ( var badUrl in result.badUrls ) {
+					expect( badUrl ).notToInclude( "cdn.jsdelivr.net" );
+				}
+			} );
+
+			it( "keeps assets out of the sitemap and counts them separately", function(){
+				var result = crawlBrokenAssets();
+
+				expect( hasPage( result.pages, variables.appRoot & "assets/img/sample.jpg" ) ).toBeFalse();
+				expect( result.stats.assetsCheckedCount ).toBeGT( 0 );
+				// missing.png, missing.css, missing.js, gone.jpg, gone-image.cfm
+				expect( result.stats.assetsBrokenCount ).toBeGTE( 5 );
+			} );
+
+			it( "checks no assets when checkAssets is off", function(){
+				var result = getInstance( "sitemapService@sitemap-spider" )
+					.create( variables.appRoot & "broken-assets.cfm" );
+
+				expect( result.stats.assetsCheckedCount ).toBe( 0 );
+				expect( result.stats.assetsBrokenCount ).toBe( 0 );
 			} );
 
 		} );

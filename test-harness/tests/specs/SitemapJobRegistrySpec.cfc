@@ -292,7 +292,7 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
                 // recordFlag rather than straight off the record.
                 var registry = prepareMock( getInstance( "SitemapJobRegistry@sitemap-spider" ) );
                 makePublic( registry, "recordFlag" );
-                makePublic( registry, "recordMetadataPath" );
+                makePublic( registry, "recordPath" );
                 var settings = getInstance( "coldbox:moduleSettings:sitemap-spider" );
                 var savedPath = settings.metadataPath;
                 settings.metadataPath = "/private/configured.meta.json";
@@ -301,10 +301,12 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
                     expect( registry.recordFlag( {}, "includeVideos" ) ).toBe( settings.includeVideos );
                     expect( registry.recordFlag( { "includeVideos" : true }, "includeVideos" ) ).toBeTrue();
                     expect( registry.recordFlag( { "includeVideos" : false }, "includeVideos" ) ).toBeFalse();
-                    expect( registry.recordMetadataPath( {} ) ).toBe( settings.metadataPath );
-                    expect( registry.recordMetadataPath( { "metadataPath" : "" } ) ).toBe( "" );
-                    expect( registry.recordMetadataPath( { "metadataPath" : "/job.meta.json" } ) )
+                    expect( registry.recordFlag( {}, "writeLinkReport" ) ).toBe( settings.writeLinkReport );
+                    expect( registry.recordPath( {}, "metadataPath" ) ).toBe( settings.metadataPath );
+                    expect( registry.recordPath( { "metadataPath" : "" }, "metadataPath" ) ).toBe( "" );
+                    expect( registry.recordPath( { "metadataPath" : "/job.meta.json" }, "metadataPath" ) )
                         .toBe( "/job.meta.json" );
+                    expect( registry.recordPath( {}, "linkReportPath" ) ).toBe( settings.linkReportPath );
                 } finally {
                     settings.metadataPath = savedPath;
                 }

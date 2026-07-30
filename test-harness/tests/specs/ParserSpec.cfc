@@ -372,6 +372,87 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 					expect( links.findNoCase( "http://other.test/x.cfm" ) ).toBe( 0 );
 				} );
 
+				it( "keeps an on-host file link in assets so its status can be checked", function(){
+					// A .jpg link matches notAllowedPattern, so it is never crawled as
+					// a page. It still goes into assets because it can be a dead link.
+					var page = parseWithBase(
+						'<a href="http://example.test/pic.jpg">image</a>',
+						"http://example.test/"
+					);
+					expect( variables.parser.getLinks( page ).assets ).toBe( [ "http://example.test/pic.jpg" ] );
+				} );
+
+				it( "leaves an off-host file link out of assets", function(){
+					var page = parseWithBase(
+						'<a href="http://other.test/pic.jpg">image</a>',
+						"http://example.test/"
+					);
+					expect( variables.parser.getLinks( page ).assets ).toBeEmpty();
+				} );
+
+				it( "returns a duplicated file link only once in assets", function(){
+					var page = parseWithBase(
+						'<a href="http://example.test/pic.jpg">one</a>'
+						& '<a href="http://example.test/pic.jpg">two</a>',
+						"http://example.test/"
+					);
+					expect( variables.parser.getLinks( page ).assets.len() ).toBe( 1 );
+				} );
+
+			} );
+
+			describe( "getAssetLinks()", function(){
+
+				it( "returns on-host images, stylesheets, and scripts", function(){
+					var page = parseWithBase(
+						'<img src="logo.png">'
+						& '<link rel="stylesheet" href="site.css">'
+						& '<script src="site.js"></script>',
+						"http://example.test/"
+					);
+					var assets = variables.parser.getAssetLinks( page );
+					expect( assets ).toInclude( "http://example.test/logo.png" );
+					expect( assets ).toInclude( "http://example.test/site.css" );
+					expect( assets ).toInclude( "http://example.test/site.js" );
+				} );
+
+				it( "leaves off-host assets out", function(){
+					var page = parseWithBase(
+						'<img src="https://cdn.other.test/logo.png">',
+						"http://example.test/"
+					);
+					expect( variables.parser.getAssetLinks( page ) ).toBeEmpty();
+				} );
+
+				it( "skips an inline data: image because there is nothing to request", function(){
+					var page = parseWithBase(
+						'<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">',
+						"http://example.test/"
+					);
+					expect( variables.parser.getAssetLinks( page ) ).toBeEmpty();
+				} );
+
+				it( "skips an empty src, which jsoup would resolve to the page URL", function(){
+					var page = parseWithBase( '<img src="">', "http://example.test/" );
+					expect( variables.parser.getAssetLinks( page ) ).toBeEmpty();
+				} );
+
+				it( "returns a repeated asset only once", function(){
+					var page = parseWithBase(
+						'<img src="logo.png"><img src="logo.png">',
+						"http://example.test/"
+					);
+					expect( variables.parser.getAssetLinks( page ).len() ).toBe( 1 );
+				} );
+
+				it( "ignores a non-stylesheet link tag such as an icon", function(){
+					var page = parseWithBase(
+						'<link rel="icon" href="favicon.ico">',
+						"http://example.test/"
+					);
+					expect( variables.parser.getAssetLinks( page ) ).toBeEmpty();
+				} );
+
 			} );
 
 			describe( "getImages()", function(){

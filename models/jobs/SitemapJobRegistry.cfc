@@ -131,6 +131,8 @@ component
 	 * @writeMetadata Saves a JSON metadata file.
 	 * @metadataPath Full metadata path. Empty derives it from filePath.
 	 * @metadataIncludeUrls Adds badUrls and ignored to metadata.
+	 * @writeLinkReport Saves a JSON report of broken links, redirects, and skips.
+	 * @linkReportPath Full report path. Empty derives it from filePath.
 	 * @meta Host-owned values saved with the job.
 	 *
 	 * @return The new job's id.
@@ -150,6 +152,8 @@ component
 		boolean writeMetadata,
 		string metadataPath,
 		boolean metadataIncludeUrls,
+		boolean writeLinkReport,
+		string linkReportPath,
 		struct meta           = {}
 	){
 		// Save concrete option values so later setting changes do not affect this job.
@@ -160,6 +164,8 @@ component
 		// Preserve an explicit empty path so it still means "beside the sitemap."
 		param name="arguments.metadataPath" default="#settings.metadataPath#";
 		param name="arguments.metadataIncludeUrls" default="#settings.metadataIncludeUrls#";
+		param name="arguments.writeLinkReport" default="#settings.writeLinkReport#";
+		param name="arguments.linkReportPath" default="#settings.linkReportPath#";
 
 		if ( !len( arguments.filePath ) ) {
 			throw(
@@ -191,6 +197,8 @@ component
 			"writeMetadata"  : arguments.writeMetadata,
 			"metadataPath"   : arguments.metadataPath,
 			"metadataIncludeUrls": arguments.metadataIncludeUrls,
+			"writeLinkReport": arguments.writeLinkReport,
+			"linkReportPath" : arguments.linkReportPath,
 			"meta"           : arguments.meta,
 			"nodeId"         : "",
 			"bootId"         : "",
@@ -264,8 +272,10 @@ component
 				includeHreflang = recordFlag( record, "includeHreflang" ),
 				includeVideos   = recordFlag( record, "includeVideos" ),
 				writeMetadata   = recordFlag( record, "writeMetadata" ),
-				metadataPath    = recordMetadataPath( record ),
+				metadataPath    = recordPath( record, "metadataPath" ),
 				metadataIncludeUrls = recordFlag( record, "metadataIncludeUrls" ),
+				writeLinkReport = recordFlag( record, "writeLinkReport" ),
+				linkReportPath  = recordPath( record, "linkReportPath" ),
 				progress        = progress
 			);
 
@@ -282,7 +292,9 @@ component
 				"sitemapCount" : result.sitemapCount,
 				"stats"        : result.stats,
 				"metadataPath" : result.metadataPath,
-				"metadataSaved": result.metadataSaved
+				"metadataSaved": result.metadataSaved,
+				"linkReportPath" : result.linkReportPath,
+				"linkReportSaved": result.linkReportSaved
 			};
 		} catch ( any e ) {
 			record.status = "failed";
@@ -311,7 +323,7 @@ component
 	 *
 	 * @record The job record.
 	 * @key    One of includeImages, includeHreflang, includeVideos,
-	 *   writeMetadata, metadataIncludeUrls.
+	 *   writeMetadata, metadataIncludeUrls, writeLinkReport.
 	 */
 	private boolean function recordFlag( required struct record, required string key ){
 		return arguments.record.keyExists( arguments.key )
@@ -320,17 +332,18 @@ component
 	}
 
 	/**
-	 * recordMetadataPath
+	 * recordPath
 	 *
-	 * Returns a job's metadata path or the module default for an older record.
+	 * Returns a saved output path or the module default for an older record.
 	 * An existing empty value still means "derive from filePath."
 	 *
 	 * @record The persisted job record.
+	 * @key    Either metadataPath or linkReportPath.
 	 */
-	private string function recordMetadataPath( required struct record ){
-		return arguments.record.keyExists( "metadataPath" )
-			? arguments.record.metadataPath
-			: settings.metadataPath;
+	private string function recordPath( required struct record, required string key ){
+		return arguments.record.keyExists( arguments.key )
+			? arguments.record[ arguments.key ]
+			: settings[ arguments.key ];
 	}
 
 	/**

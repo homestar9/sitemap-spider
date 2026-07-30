@@ -49,10 +49,20 @@ component
             headers = toHeaderStruct( response.allHeaders() );
         }
 
+        // Build the chain before the status check so a failed response still
+        // reports the redirect steps that led to it.
+        var chain = buildRedirectChain( response );
+
         if ( statusCode != 200 ) {
             throw(
                 message = "Failed to fetch #arguments.url# HTTP request returned status code #statusCode#",
-                type = "StatusCodeException"
+                type = "StatusCodeException",
+                errorCode    = statusCode,
+                extendedInfo = serializeJSON( {
+                    "status" : statusCode,
+                    "url"    : page.url().toString(),
+                    "chain"  : chain
+                } )
             );
         }
 
@@ -64,7 +74,6 @@ component
             body = page.content()
         );
 
-        var chain = buildRedirectChain( response );
         if ( chain.len() > 1 ) {
             result[ "redirectChain" ] = chain;
         }

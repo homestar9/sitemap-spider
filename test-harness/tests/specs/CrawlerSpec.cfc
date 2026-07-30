@@ -990,6 +990,334 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			} );
 
 		} );
+
+		describe( "crawl() failure detail in badUrls", function(){
+
+			it( "records the status code and reason for a missing page", function(){
+				var badUrl = variables.root & "gone.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( badUrl ) );
+				ctx.fake.failOn( badUrl, "not found", 404 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.badUrls[ badUrl ].status ).toBe( 404 );
+				expect( result.badUrls[ badUrl ].reason ).toBe( "notFound" );
+				expect( result.badUrls[ badUrl ].kind ).toBe( "page" );
+			} );
+
+			it( "separates a server error from a missing page", function(){
+				var missingUrl = variables.root & "gone.cfm";
+				var brokenUrl  = variables.root & "boom.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( missingUrl ) & link( brokenUrl ) );
+				ctx.fake.failOn( missingUrl, "not found", 404 );
+				ctx.fake.failOn( brokenUrl, "server exploded", 500 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.badUrls[ missingUrl ].reason ).toBe( "notFound" );
+				expect( result.badUrls[ brokenUrl ].reason ).toBe( "serverError" );
+			} );
+
+			it( "reports a redirect loop as tooManyRedirects with no status", function(){
+				var loopUrl = variables.root & "loop.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( loopUrl ) );
+				ctx.fake.failOn(
+					url     = loopUrl,
+					message = "Too many redirects",
+					status  = 0,
+					chain   = [ { "url": loopUrl, "status": 301 } ],
+					type    = "TooManyRedirectsException"
+				);
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.badUrls[ loopUrl ].reason ).toBe( "tooManyRedirects" );
+				expect( result.badUrls[ loopUrl ].status ).toBe( 0 );
+			} );
+
+			it( "keeps the redirect steps that led to a failure", function(){
+				var movedUrl = variables.root & "moved.cfm";
+				var finalUrl = variables.root & "final.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( movedUrl ) );
+				// The chain ends at a URL that 404s, so the steps would be lost if
+				// the crawler only kept the exception message.
+				ctx.fake.failOn(
+					url     = movedUrl,
+					message = "not found",
+					status  = 404,
+					chain   = [
+						{ "url": movedUrl, "status": 301 },
+						{ "url": finalUrl, "status": 404 }
+					]
+				);
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.badUrls[ movedUrl ].redirectChain.len() ).toBe( 2 );
+				expect( result.badUrls[ movedUrl ].redirectChain[ 2 ].url ).toBe( finalUrl );
+			} );
+
+			it( "falls back to status 0 and reason unknown when the browser adds no detail", function(){
+				var badUrl = variables.root & "b.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( badUrl ) );
+				// No status argument, which is what an older custom browser backend
+				// would produce. The crawl must still finish.
+				ctx.fake.failOn( badUrl, "boom" );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.badUrls[ badUrl ].status ).toBe( 0 );
+				expect( result.badUrls[ badUrl ].reason ).toBe( "unknown" );
+			} );
+
+		} );
+
+		describe( "crawl() inbound link tracking", function(){
+
+			it( "names the page a broken link was found on", function(){
+				var aboutUrl = variables.root & "about.cfm";
+				var badUrl   = variables.root & "gone.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( aboutUrl ) );
+				ctx.fake.addPage( aboutUrl, link( badUrl ) );
+				ctx.fake.failOn( badUrl, "not found", 404 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.badUrls[ badUrl ].foundOn ).toBe( [ aboutUrl ] );
+				expect( result.badUrls[ badUrl ].foundOnTruncated ).toBeFalse();
+			} );
+
+			it( "lists every page linking to the same broken URL", function(){
+				var badUrl = variables.root & "gone.cfm";
+				var oneUrl = variables.root & "one.cfm";
+				var twoUrl = variables.root & "two.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( oneUrl ) & link( twoUrl ) );
+				ctx.fake.addPage( oneUrl, link( badUrl ) );
+				ctx.fake.addPage( twoUrl, link( badUrl ) );
+				ctx.fake.failOn( badUrl, "not found", 404 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				var foundOn = result.badUrls[ badUrl ].foundOn;
+				expect( foundOn.len() ).toBe( 2 );
+				expect( foundOn ).toInclude( oneUrl );
+				expect( foundOn ).toInclude( twoUrl );
+			} );
+
+			it( "caps the list at maxInboundLinks and marks it truncated", function(){
+				var badUrl = variables.root & "gone.cfm";
+				var oneUrl = variables.root & "one.cfm";
+				var twoUrl = variables.root & "two.cfm";
+
+				var ctx = buildCrawler( { maxInboundLinks : 1 } );
+				ctx.fake.addPage( variables.root, link( oneUrl ) & link( twoUrl ) );
+				ctx.fake.addPage( oneUrl, link( badUrl ) );
+				ctx.fake.addPage( twoUrl, link( badUrl ) );
+				ctx.fake.failOn( badUrl, "not found", 404 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.badUrls[ badUrl ].foundOn.len() ).toBe( 1 );
+				expect( result.badUrls[ badUrl ].foundOnTruncated ).toBeTrue();
+			} );
+
+			it( "records no referrers when trackInboundLinks is off", function(){
+				var aboutUrl = variables.root & "about.cfm";
+				var badUrl   = variables.root & "gone.cfm";
+
+				var ctx = buildCrawler( { trackInboundLinks : false } );
+				ctx.fake.addPage( variables.root, link( aboutUrl ) );
+				ctx.fake.addPage( aboutUrl, link( badUrl ) );
+				ctx.fake.failOn( badUrl, "not found", 404 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.badUrls[ badUrl ].foundOn ).toBeEmpty();
+			} );
+
+			it( "keeps referrers for a redirected URL so its links can be updated", function(){
+				var oldUrl = variables.root & "old.cfm";
+				var newUrl = variables.root & "new.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( oldUrl ) );
+				ctx.fake.addPage(
+					url           = oldUrl,
+					html          = "",
+					finalUrl      = newUrl,
+					redirectChain = [
+						{ "url": oldUrl, "status": 301 },
+						{ "url": newUrl, "status": 200 }
+					]
+				);
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.redirects.len() ).toBe( 1 );
+				expect( result.redirects[ 1 ].status ).toBe( 301 );
+				expect( result.redirects[ 1 ].foundOn ).toBe( [ variables.root ] );
+			} );
+
+			it( "records the failure detail and referrer under parallel crawling", function(){
+				var aboutUrl = variables.root & "about.cfm";
+				var badUrl   = variables.root & "gone.cfm";
+
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, link( aboutUrl ) );
+				ctx.fake.addPage( aboutUrl, link( badUrl ) );
+				ctx.fake.failOn( badUrl, "not found", 404 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
+
+				expect( result.runAsync ).toBeTrue();
+				expect( result.badUrls[ badUrl ].status ).toBe( 404 );
+				expect( result.badUrls[ badUrl ].reason ).toBe( "notFound" );
+				expect( result.badUrls[ badUrl ].foundOn ).toBe( [ aboutUrl ] );
+			} );
+
+		} );
+
+		describe( "crawl() asset checking", function(){
+
+			it( "checks nothing when checkAssets is off", function(){
+				var ctx = buildCrawler();
+				ctx.fake.addPage( variables.root, '<img src="#variables.root#logo.png">' );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( ctx.fake.getCheckedUrls() ).toBeEmpty();
+				expect( result.assetsChecked ).toBe( 0 );
+			} );
+
+			it( "reports a missing image as a broken asset", function(){
+				var imageUrl = variables.root & "logo.png";
+
+				var ctx = buildCrawler( { checkAssets : true } );
+				ctx.fake.addPage( variables.root, '<img src="#imageUrl#">' );
+				ctx.fake.addAsset( imageUrl, 404 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.badUrls ).toHaveKey( imageUrl );
+				expect( result.badUrls[ imageUrl ].kind ).toBe( "asset" );
+				expect( result.badUrls[ imageUrl ].status ).toBe( 404 );
+				expect( result.badUrls[ imageUrl ].foundOn ).toBe( [ variables.root ] );
+				// An asset is never a sitemap entry.
+				expect( hasPage( result.pages, imageUrl ) ).toBeFalse();
+			} );
+
+			it( "leaves a working asset out of badUrls", function(){
+				var imageUrl = variables.root & "logo.png";
+
+				var ctx = buildCrawler( { checkAssets : true } );
+				ctx.fake.addPage( variables.root, '<img src="#imageUrl#">' );
+				ctx.fake.addAsset( imageUrl, 200 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( result.badUrls ).notToHaveKey( imageUrl );
+				expect( result.assetsChecked ).toBe( 1 );
+			} );
+
+			it( "checks a stylesheet, a script, and a directly linked image", function(){
+				var cssUrl   = variables.root & "site.css";
+				var jsUrl    = variables.root & "site.js";
+				// notAllowedPattern blocks .jpg, so this link is never crawled as a
+				// page. Before assets were collected it was dropped and never seen.
+				var photoUrl = variables.root & "photo.jpg";
+
+				var ctx = buildCrawler( { checkAssets : true } );
+				ctx.fake.addPage(
+					variables.root,
+					'<link rel="stylesheet" href="#cssUrl#">'
+						& '<script src="#jsUrl#"></script>'
+						& link( photoUrl )
+				);
+				ctx.fake.addAsset( cssUrl, 200 );
+				ctx.fake.addAsset( jsUrl, 200 );
+				ctx.fake.addAsset( photoUrl, 200 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				var checked = ctx.fake.getCheckedUrls();
+				expect( checked ).toInclude( cssUrl );
+				expect( checked ).toInclude( jsUrl );
+				expect( checked ).toInclude( photoUrl );
+				expect( result.assetsChecked ).toBe( 3 );
+			} );
+
+			it( "requests an asset used by several pages only once", function(){
+				var imageUrl = variables.root & "logo.png";
+				var oneUrl   = variables.root & "one.cfm";
+				var twoUrl   = variables.root & "two.cfm";
+				var imgTag   = '<img src="#imageUrl#">';
+
+				var ctx = buildCrawler( { checkAssets : true } );
+				ctx.fake.addPage( variables.root, link( oneUrl ) & link( twoUrl ) & imgTag );
+				ctx.fake.addPage( oneUrl, imgTag );
+				ctx.fake.addPage( twoUrl, imgTag );
+				ctx.fake.addAsset( imageUrl, 200 );
+
+				ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( ctx.fake.getCheckedUrls().len() ).toBe( 1 );
+			} );
+
+			it( "ignores an off-host asset", function(){
+				var ctx = buildCrawler( { checkAssets : true } );
+				ctx.fake.addPage( variables.root, '<img src="https://cdn.other.test/logo.png">' );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( ctx.fake.getCheckedUrls() ).toBeEmpty();
+				expect( result.assetsChecked ).toBe( 0 );
+			} );
+
+			it( "stops collecting at maxAssetChecks and still finishes the crawl", function(){
+				var ctx = buildCrawler( { checkAssets : true, maxAssetChecks : 1 } );
+				ctx.fake.addPage(
+					variables.root,
+					'<img src="#variables.root#one.png">' & '<img src="#variables.root#two.png">'
+				);
+				ctx.fake.addAsset( variables.root & "one.png", 200 );
+				ctx.fake.addAsset( variables.root & "two.png", 200 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [] );
+
+				expect( ctx.fake.getCheckedUrls().len() ).toBe( 1 );
+				expect( result.pages.len() ).toBe( 1 );
+			} );
+
+			it( "checks assets under parallel crawling too", function(){
+				var imageUrl = variables.root & "logo.png";
+
+				var ctx = buildCrawler( { checkAssets : true } );
+				ctx.fake.addPage( variables.root, '<img src="#imageUrl#">' );
+				ctx.fake.addAsset( imageUrl, 404 );
+
+				var result = ctx.crawler.crawl( urls = [ variables.root ], excludeUrls = [], runAsync = true );
+
+				expect( result.runAsync ).toBeTrue();
+				expect( result.badUrls ).toHaveKey( imageUrl );
+				expect( result.badUrls[ imageUrl ].kind ).toBe( "asset" );
+				expect( result.badUrls[ imageUrl ].foundOn ).toBe( [ variables.root ] );
+			} );
+
+		} );
 	}
 
 }

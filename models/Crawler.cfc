@@ -36,6 +36,21 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.redirects = {};
         // Maps each skipped URL to its first skip reason.
         variables.ignoredUrls = {};
+        // The four maps below use the same Java containers and the same helper
+        // code in both crawl modes. initAsyncState() swaps in concurrent versions
+        // that answer the same method calls, so nothing that reads or writes them
+        // needs to know which mode is running.
+        //
+        // Maps each discovered URL to the pages that link to it. Entries are
+        // dropped once a URL is fetched successfully, so this holds referrers for
+        // the frontier and the failures only, not for the whole site.
+        variables.inboundLinks = createObject( "java", "java.util.LinkedHashMap" ).init();
+        // Marks URLs that hit maxInboundLinks so the report can say so.
+        variables.inboundTruncated = createObject( "java", "java.util.LinkedHashMap" ).init();
+        // Maps each on-host asset URL to nothing; used as a set of URLs to check.
+        variables.assetUrls = createObject( "java", "java.util.LinkedHashMap" ).init();
+        // Maps each checked asset URL to its { status, ok } result.
+        variables.assetResults = createObject( "java", "java.util.LinkedHashMap" ).init();
         variables.robotsBasePath = "/"; // Path used as the robots.txt rule root.
         variables.effectiveCrawlDelay = 0; // Seconds between fetches after applying the cap.
         variables.hasFetched = false; // Prevents a delay before the first synchronous fetch.
@@ -183,6 +198,9 @@ component accessors=true hint="Handles crawling of website URLs" {
                     runQueueItem();
                 }
             }
+            // Check collected assets once every page has been seen, so each unique
+            // file is requested only once.
+            checkAssets();
         } finally {
             browser.shutdown();
             variables.progress.markEnded();
@@ -357,13 +375,19 @@ component accessors=true hint="Handles crawling of website URLs" {
             var fetchResult = browser.fetchUrl( normalizedUrl );
         } catch ( any e ) {
             logger.error( "Error fetching #arguments.url#: #e.message#, Detail: #e.detail#" );
-            appendBadUrl( normalizedUrl, e.message );
+            var failure = classifyFetchError( e );
+            appendBadUrl( normalizedUrl, e.message, failure.status, failure.reason, failure.chain );
             return;
         }
 
         // Record HTTP redirects under the requested URL.
         if ( fetchResult.keyExists( "redirectChain" ) ) {
             appendRedirect( normalizedUrl, fetchResult.redirectChain );
+        } else {
+            // Fetched fine and did not move, so nothing here needs reporting and
+            // the pages linking to it can be forgotten. A redirect keeps its
+            // referrers: those are the pages whose links should be updated.
+            removeInboundLinks( normalizedUrl );
         }
 
         // assert: fetchResult contains a successful response.
@@ -393,6 +417,17 @@ component accessors=true hint="Handles crawling of website URLs" {
             links = linkResult.links;
             for ( var ignoredLink in linkResult.ignored ) {
                 appendIgnoredUrl( ignoredLink.url, ignoredLink.reason );
+            }
+            // Remember this page as the source of every link it contains, so a
+            // broken one can name the page that needs fixing.
+            for ( var foundLink in links ) {
+                recordInboundLink( foundLink, fetchedUrl );
+            }
+            // Collect on-host files that are linked or embedded but never crawled
+            // as pages. checkAssets() requests each unique one after the crawl.
+            if ( settings.checkAssets ) {
+                collectAssets( linkResult.assets, fetchedUrl );
+                collectAssets( parser.getAssetLinks( parsedPage ), fetchedUrl );
             }
             // Read the last-modified value.
             lastModified = parser.getLastModified( fetchResult, parsedPage );
@@ -652,19 +687,141 @@ component accessors=true hint="Handles crawling of website URLs" {
     /**
      * appendBadUrl
      *
-     * Records a URL that could not be fetched.
+     * Records a URL that could not be fetched. foundOn stays empty here and is
+     * filled from inboundLinks once, in buildCrawlResult().
      *
      * @url URL that failed.
      * @message Fetch error message.
+     * @status HTTP status, or 0 when the request never got a response.
+     * @reason Short failure category from classifyFetchError().
+     * @chain Redirect steps taken before the failure.
+     * @kind "page" for a crawled URL, "asset" for a checked file.
      */
-    private void function appendBadUrl( required string url, required string message ) {
+    private void function appendBadUrl(
+        required string url,
+        required string message,
+        numeric status = 0,
+        string reason = "unknown",
+        array chain = [],
+        string kind = "page"
+    ) {
         variables.progress.incrementBad();
-        var entry = { "message": arguments.message };
+        var entry = {
+            "message"       : arguments.message,
+            "status"        : arguments.status,
+            "reason"        : arguments.reason,
+            "kind"          : arguments.kind,
+            "redirectChain" : arguments.chain,
+            "foundOn"       : [],
+            "foundOnTruncated" : false
+        };
         if ( variables.async ) {
             variables.badUrls.put( arguments.url, entry );
             return;
         }
         variables.badUrls[ arguments.url ] = entry;
+    }
+
+    /**
+     * classifyFetchError
+     *
+     * Turns a fetch exception into a status code, a short reason, and the redirect
+     * steps that led to it.
+     *
+     * A browser backend reports the status in errorCode and the steps in
+     * extendedInfo as JSON. Both are optional: a custom IBrowser that does not set
+     * them still crawls fine, it just reports status 0 and reason "unknown".
+     * Transport failures never have a status, so their reason comes from the
+     * exception type instead.
+     *
+     * @e The caught exception.
+     */
+    private struct function classifyFetchError( required any e ) {
+        var status = 0;
+        var chain  = [];
+
+        // errorCode is a string on some engines, so test it before using it.
+        if ( arguments.e.keyExists( "errorCode" ) && isNumeric( arguments.e.errorCode ) ) {
+            status = int( arguments.e.errorCode );
+        }
+
+        // extendedInfo carries the status and redirect steps as JSON.
+        if ( arguments.e.keyExists( "extendedInfo" ) && isJSON( arguments.e.extendedInfo ) ) {
+            var info = deserializeJSON( arguments.e.extendedInfo );
+            if ( isStruct( info ) ) {
+                if ( status == 0 && info.keyExists( "status" ) && isNumeric( info.status ) ) {
+                    status = int( info.status );
+                }
+                if ( info.keyExists( "chain" ) && isArray( info.chain ) ) {
+                    chain = info.chain;
+                }
+            }
+        }
+
+        return { "status": status, "reason": failureReason( arguments.e, status ), "chain": chain };
+    }
+
+    /**
+     * statusReason
+     *
+     * Returns the short category for an HTTP status, or an empty string when the
+     * status cannot explain the failure on its own. Both failed page fetches and
+     * failed asset checks use this so they report the same words.
+     *
+     * @status HTTP status, or 0 when the request never got a response.
+     */
+    private string function statusReason( required numeric status ) {
+        if ( arguments.status == 404 || arguments.status == 410 ) {
+            return "notFound";
+        }
+        if ( arguments.status >= 500 ) {
+            return "serverError";
+        }
+        if ( arguments.status >= 400 ) {
+            return "clientError";
+        }
+        // A 3xx here means a redirect the browser could not follow, such as one
+        // with no Location header.
+        if ( arguments.status >= 300 ) {
+            return "redirectError";
+        }
+        return "";
+    }
+
+    /**
+     * failureReason
+     *
+     * Returns the short category for a failed fetch. An HTTP status decides the
+     * reason when there is one. Otherwise the exception type names the transport
+     * problem, which is the only clue a connection failure leaves behind.
+     *
+     * @e The caught exception.
+     * @status HTTP status, or 0 when the request never got a response.
+     */
+    private string function failureReason( required any e, required numeric status ) {
+        var byStatus = statusReason( arguments.status );
+        if ( len( byStatus ) ) {
+            return byStatus;
+        }
+
+        // No status: read the exception type. Java class names arrive fully
+        // qualified, so match on a substring rather than the whole value.
+        var type = arguments.e.keyExists( "type" ) ? arguments.e.type : "";
+        if ( findNoCase( "TooManyRedirects", type ) ) {
+            return "tooManyRedirects";
+        }
+        if ( findNoCase( "Timeout", type ) || findNoCase( "TimedOut", type ) ) {
+            return "timeout";
+        }
+        if (
+            findNoCase( "UnknownHost", type ) ||
+            findNoCase( "ConnectException", type ) ||
+            findNoCase( "NoRouteToHost", type ) ||
+            findNoCase( "SSL", type )
+        ) {
+            return "connectionFailed";
+        }
+        return "unknown";
     }
 
     /**
@@ -699,6 +856,124 @@ component accessors=true hint="Handles crawling of website URLs" {
         if ( !variables.ignoredUrls.keyExists( arguments.url ) ) {
             variables.ignoredUrls[ arguments.url ] = arguments.reason;
         }
+    }
+
+    /**
+     * recordInboundLink
+     *
+     * Records that one page links to a URL, so a broken link can name the pages
+     * that need fixing.
+     *
+     * Referrers are only worth keeping for URLs that might turn out to be broken,
+     * so this skips a URL that already fetched successfully and
+     * removeInboundLinks() drops the rest as they succeed. Memory therefore tracks
+     * the frontier plus the failures instead of every link on the site.
+     *
+     * The referrer lists are always CopyOnWriteArrayList, even in a single-threaded
+     * crawl, so this method has one body instead of one per crawl mode. Copying a
+     * list of at most maxInboundLinks entries costs nothing, and a Java list cannot
+     * be silently duplicated the way Adobe duplicates a CFML array read out of a
+     * struct.
+     *
+     * @target URL that was linked to.
+     * @source Page the link was found on.
+     */
+    private void function recordInboundLink( required string target, required string source ) {
+        if ( !settings.trackInboundLinks || settings.maxInboundLinks <= 0 ) {
+            return;
+        }
+        // A page linking to itself tells a webmaster nothing.
+        if ( arguments.target == arguments.source || !len( arguments.target ) ) {
+            return;
+        }
+        // Already fetched, working, and not moved, so there is nothing left to
+        // report about it and its referrers were already dropped.
+        if (
+            isUrlProcessed( arguments.target ) &&
+            !isBadUrl( arguments.target ) &&
+            !isRedirected( arguments.target )
+        ) {
+            return;
+        }
+
+        var list = variables.inboundLinks.get( arguments.target );
+        if ( isNull( list ) ) {
+            // putIfAbsent decides which worker's list wins the race.
+            var created = createObject( "java", "java.util.concurrent.CopyOnWriteArrayList" ).init();
+            list = variables.inboundLinks.putIfAbsent( arguments.target, created );
+            if ( isNull( list ) ) {
+                list = created;
+            }
+        }
+        if ( list.contains( arguments.source ) ) {
+            return;
+        }
+        // size() and add() are not one atomic step, so a burst of parallel workers
+        // can store one or two past the cap. The cap exists to bound memory, so
+        // being off by one does not matter.
+        if ( list.size() >= settings.maxInboundLinks ) {
+            variables.inboundTruncated.put( arguments.target, true );
+            return;
+        }
+        list.add( arguments.source );
+    }
+
+    /**
+     * removeInboundLinks
+     *
+     * Drops the referrers for a URL that fetched successfully. This is what keeps
+     * inboundLinks small on a large site.
+     *
+     * @url URL that no longer needs referrers.
+     */
+    private void function removeInboundLinks( required string url ) {
+        if ( !settings.trackInboundLinks ) {
+            return;
+        }
+        variables.inboundLinks.remove( arguments.url );
+        variables.inboundTruncated.remove( arguments.url );
+    }
+
+    /**
+     * inboundFor
+     *
+     * Returns the pages that link to a URL and whether the list was capped.
+     *
+     * @url URL to look up.
+     */
+    private struct function inboundFor( required string url ) {
+        var list = variables.inboundLinks.get( arguments.url );
+        return {
+            "foundOn": isNull( list ) ? [] : javaListToArray( list ),
+            "foundOnTruncated": variables.inboundTruncated.containsKey( arguments.url )
+        };
+    }
+
+    /**
+     * isBadUrl
+     *
+     * Returns whether a URL is already recorded as failed. badUrls is a CFML
+     * struct in a synchronous crawl and a Java map in a parallel one.
+     *
+     * @url URL to check.
+     */
+    private boolean function isBadUrl( required string url ) {
+        return variables.async
+            ? variables.badUrls.containsKey( arguments.url )
+            : variables.badUrls.keyExists( arguments.url );
+    }
+
+    /**
+     * isRedirected
+     *
+     * Returns whether a URL was recorded as redirecting somewhere else.
+     *
+     * @url URL to check.
+     */
+    private boolean function isRedirected( required string url ) {
+        return variables.async
+            ? variables.redirects.containsKey( arguments.url )
+            : variables.redirects.keyExists( arguments.url );
     }
 
     /**
@@ -738,6 +1013,13 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.badUrls       = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.ignoredUrls   = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.redirects     = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
+        // These four already hold Java maps. Swapping in the concurrent versions
+        // keeps every caller's method calls identical, so the helpers that read
+        // and write them need no parallel-mode branch.
+        variables.inboundLinks     = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
+        variables.inboundTruncated = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
+        variables.assetUrls        = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
+        variables.assetResults     = createObject( "java", "java.util.concurrent.ConcurrentHashMap" ).init();
         variables.pending       = createObject( "java", "java.util.concurrent.atomic.AtomicInteger" ).init( javaCast( "int", 0 ) );
         variables.pageCount     = createObject( "java", "java.util.concurrent.atomic.AtomicInteger" ).init( javaCast( "int", 0 ) );
         // Workers share this timestamp to apply one Crawl-delay across all fetches.
@@ -830,14 +1112,199 @@ component accessors=true hint="Handles crawling of website URLs" {
     }
 
     /**
+     * collectAssets
+     *
+     * Adds on-host files to the set that checkAssets() requests later, and records
+     * the page each one was found on.
+     *
+     * Collecting now and checking afterwards means a file used by every page, such
+     * as a logo, is requested once instead of once per page.
+     *
+     * @urls Absolute on-host asset URLs found on a page.
+     * @sourceUrl Page the assets were found on.
+     */
+    private void function collectAssets( required array urls, required string sourceUrl ) {
+        for ( var assetUrl in arguments.urls ) {
+            if ( !len( assetUrl ) || isUrlExcluded( assetUrl ) ) {
+                continue;
+            }
+            // Stop adding once the cap is reached. checkAssets() logs the total.
+            if ( variables.assetUrls.size() >= settings.maxAssetChecks ) {
+                return;
+            }
+            variables.assetUrls.putIfAbsent( assetUrl, true );
+            recordInboundLink( assetUrl, arguments.sourceUrl );
+        }
+    }
+
+    /**
+     * checkAssets
+     *
+     * Requests the status of every collected asset after the page crawl finishes.
+     *
+     * Assets never become pages: they are not parsed, not queued, not counted
+     * toward maxPages, and never reach the sitemap XML. A failed one is recorded
+     * in badUrls with kind "asset".
+     */
+    private void function checkAssets() {
+        if ( !settings.checkAssets || variables.progress.isCanceled() ) {
+            return;
+        }
+        var urls = javaMapKeys( variables.assetUrls );
+        if ( !urls.len() ) {
+            return;
+        }
+        if ( urls.len() >= settings.maxAssetChecks ) {
+            logger.warn( "Asset check stopped collecting at maxAssetChecks (#settings.maxAssetChecks#); some assets were not checked" );
+        }
+        logger.info( "Checking #urls.len()# on-host assets" );
+
+        if ( variables.async ) {
+            runAsyncAssetChecks( urls );
+            return;
+        }
+        for ( var assetUrl in urls ) {
+            if ( variables.progress.isCanceled() ) {
+                return;
+            }
+            checkAsset( assetUrl );
+        }
+    }
+
+    /**
+     * checkAsset
+     *
+     * Requests one asset's status and records the outcome. checkUrl() should not
+     * throw, but a custom browser backend might, so a failure here is recorded
+     * rather than allowed to stop the phase.
+     *
+     * @url Asset URL to check.
+     */
+    private void function checkAsset( required string url ) {
+        applyCrawlDelay();
+        try {
+            var result = browser.checkUrl( arguments.url );
+        } catch ( any e ) {
+            logger.error( "Error checking asset #arguments.url#: #e.message#" );
+            var failure = classifyFetchError( e );
+            recordAssetFailure( arguments.url, e.message, failure.status, failure.reason, failure.chain );
+            return;
+        }
+        recordAssetResult( arguments.url, result );
+    }
+
+    /**
+     * recordAssetResult
+     *
+     * Stores an asset check outcome. A working asset drops its referrers because
+     * there is nothing left to report about it.
+     *
+     * @url Asset URL that was checked.
+     * @result Struct from IBrowser.checkUrl().
+     */
+    private void function recordAssetResult( required string url, required struct result ) {
+        var status = arguments.result.keyExists( "status" ) ? arguments.result.status : 0;
+        var ok     = arguments.result.keyExists( "ok" ) && arguments.result.ok;
+
+        variables.assetResults.put( arguments.url, { "status": status, "ok": ok } );
+
+        if ( ok ) {
+            removeInboundLinks( arguments.url );
+            return;
+        }
+
+        var errorText = arguments.result.keyExists( "error" ) && len( arguments.result.error )
+            ? arguments.result.error
+            : "Asset request returned status code #status#";
+        // A status explains the failure when there is one. Otherwise the request
+        // never got a response, which is a connection problem.
+        var reason = statusReason( status );
+        recordAssetFailure(
+            arguments.url,
+            errorText,
+            status,
+            len( reason ) ? reason : "connectionFailed",
+            arguments.result.keyExists( "redirectChain" ) ? arguments.result.redirectChain : []
+        );
+    }
+
+    /**
+     * recordAssetFailure
+     *
+     * Records a broken asset in badUrls alongside broken pages, tagged kind
+     * "asset" so a report can list them separately.
+     *
+     * @url Asset URL that failed.
+     * @message Failure text.
+     * @status HTTP status, or 0 when there was no response.
+     * @reason Short failure category.
+     * @chain Redirect steps taken before the failure.
+     */
+    private void function recordAssetFailure(
+        required string url,
+        required string message,
+        required numeric status,
+        required string reason,
+        required array chain
+    ) {
+        variables.assetResults.put( arguments.url, { "status": arguments.status, "ok": false } );
+        appendBadUrl( arguments.url, arguments.message, arguments.status, arguments.reason, arguments.chain, "asset" );
+    }
+
+    /**
+     * runAsyncAssetChecks
+     *
+     * Runs the asset checks across worker threads. The queue is filled before any
+     * worker starts, so an empty poll means the work is finished.
+     *
+     * @urls Asset URLs to check.
+     */
+    private void function runAsyncAssetChecks( required array urls ) {
+        var queue = createObject( "java", "java.util.concurrent.LinkedBlockingQueue" ).init();
+        for ( var assetUrl in arguments.urls ) {
+            queue.add( assetUrl );
+        }
+        variables.assetQueue = queue;
+
+        // Never start more workers than there are assets to check.
+        var threadCount = max( 1, min( settings.asyncMaxThreads, arguments.urls.len() ) );
+        var runToken    = createUUID();
+        var threadNames = [];
+        for ( var i = 1; i <= threadCount; i++ ) {
+            var threadName = "sitemap-asset-" & runToken & "-" & i;
+            threadNames.append( threadName );
+            thread name="#threadName#" {
+                while ( true ) {
+                    if ( variables.progress.isCanceled() ) {
+                        break;
+                    }
+                    var item = variables.assetQueue.poll();
+                    if ( isNull( item ) ) {
+                        break;
+                    }
+                    try {
+                        checkAsset( item );
+                    } catch ( any e ) {
+                        logger.error( "Asset check worker error on #item#: #e.message#", e );
+                    }
+                }
+            }
+        }
+
+        for ( var workerName in threadNames ) {
+            thread action="join" name="#workerName#";
+        }
+    }
+
+    /**
      * buildCrawlResult
      *
      * Returns the public crawl result shape. It converts concurrent maps to CFML
      * arrays and structs after a parallel crawl.
      */
     private struct function buildCrawlResult() {
-        if ( variables.async ) {
-            return {
+        var result = variables.async
+            ? {
                 // Return page values instead of the internal map.
                 "pages": javaMapValues( variables.pages ),
                 "badUrls": javaMapToStruct( variables.badUrls ),
@@ -845,18 +1312,31 @@ component accessors=true hint="Handles crawling of website URLs" {
                 "ignored": buildIgnoredPairs(),
                 "redirects": buildRedirectPairs(),
                 "runAsync": true
+            }
+            : {
+                // Synchronous pages are already an array.
+                "pages": variables.pages,
+                "badUrls": variables.badUrls,
+                // processedUrls uses a Java map to preserve case-sensitive keys.
+                "processedUrls": javaMapKeys( variables.processedUrls ),
+                "ignored": buildIgnoredPairs(),
+                "redirects": buildRedirectPairs(),
+                "runAsync": false
             };
+
+        // assetResults is a Java map in both modes, so this count is the same
+        // either way.
+        result[ "assetsChecked" ] = variables.assetResults.size();
+
+        // Fill referrers once, at the end, instead of on every failure during the
+        // crawl. Only failures need them, and only now is the list complete.
+        for ( var badUrl in result.badUrls ) {
+            var inbound = inboundFor( badUrl );
+            result.badUrls[ badUrl ][ "foundOn" ]          = inbound.foundOn;
+            result.badUrls[ badUrl ][ "foundOnTruncated" ] = inbound.foundOnTruncated;
         }
-        return {
-            // Synchronous pages are already an array.
-            "pages": variables.pages,
-            "badUrls": variables.badUrls,
-            // processedUrls uses a Java map to preserve case-sensitive keys.
-            "processedUrls": javaMapKeys( variables.processedUrls ),
-            "ignored": buildIgnoredPairs(),
-            "redirects": buildRedirectPairs(),
-            "runAsync": false
-        };
+
+        return result;
     }
 
     /**
@@ -890,7 +1370,18 @@ component accessors=true hint="Handles crawling of website URLs" {
      */
     private struct function redirectPair( required string requestedUrl, required array chain ) {
         var finalUrl = arguments.chain.len() ? arguments.chain[ arguments.chain.len() ].url : arguments.requestedUrl;
-        return { "from": arguments.requestedUrl, "to": finalUrl, "chain": arguments.chain };
+        // The first hop's status says whether the move is permanent, which decides
+        // whether a webmaster should update the links pointing at it.
+        var firstStatus = arguments.chain.len() ? arguments.chain[ 1 ].status : 0;
+        var inbound     = inboundFor( arguments.requestedUrl );
+        return {
+            "from"             : arguments.requestedUrl,
+            "to"               : finalUrl,
+            "status"           : firstStatus,
+            "chain"            : arguments.chain,
+            "foundOn"          : inbound.foundOn,
+            "foundOnTruncated" : inbound.foundOnTruncated
+        };
     }
 
     /**
@@ -957,6 +1448,23 @@ component accessors=true hint="Handles crawling of website URLs" {
     private array function javaMapValues( required any javaMap ) {
         var out      = [];
         var iterator = arguments.javaMap.values().iterator();
+        while ( iterator.hasNext() ) {
+            out.append( iterator.next() );
+        }
+        return out;
+    }
+
+    /**
+     * javaListToArray
+     *
+     * Copies a Java list into a CFML array. Iterating keeps values intact, which
+     * a list-to-string conversion would not: a URL can contain a comma.
+     *
+     * @javaList List to copy.
+     */
+    private array function javaListToArray( required any javaList ) {
+        var out      = [];
+        var iterator = arguments.javaList.iterator();
         while ( iterator.hasNext() ) {
             out.append( iterator.next() );
         }
