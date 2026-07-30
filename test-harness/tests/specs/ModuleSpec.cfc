@@ -2,10 +2,8 @@
  * Baseline integration spec for the sitemap-spider module.
  *
  * It crawls the sample site under tests/resources/sample-site and pins the
- * crawler's CURRENT behavior so later tasks have a trustworthy green starting
- * point. Where current behavior is a known limitation that a later task will
- * change, the assertion pins today's value and carries a TODO(task NN) note
- * instead of asserting the eventual value.
+ * crawler's behavior end to end, so a change that alters what the crawl
+ * returns shows up here as a failing spec.
  *
  * Local run recipe:
  *   1. box server start serverConfigFile=server-adobe@2023.json
@@ -249,6 +247,62 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 			// location.replace to contact.cfm) is not testable under the default jsoup
 			// backend, which cannot run JavaScript. Its live assertion runs in
 			// PlaywrightSpec, which uses the Playwright backend.
+
+		} );
+
+		describe( "noindex handling", function(){
+
+			// The noindex fixtures are not linked from any reachable page, so each
+			// spec starts the crawl at the fixture directly. This leaves the shared
+			// baseline crawl in beforeAll untouched.
+
+			it( "excludes a meta-noindex page but still follows its links", function(){
+				var noindexUrl = variables.appRoot & "noindex.cfm";
+				var childUrl   = variables.appRoot & "noindex-child.cfm";
+
+				var result = getInstance( "sitemapService@sitemap-spider" ).create( noindexUrl );
+
+				// The page itself stays off the sitemap and is reported in ignored,
+				// but its child link (linked from nowhere else) was still crawled —
+				// noindex is not nofollow.
+				expect( hasPage( result.pages, noindexUrl ) ).toBeFalse();
+				expect( hasPage( result.pages, childUrl ) ).toBeTrue();
+
+				var reasons = {};
+				for ( var entry in result.ignored ) {
+					reasons[ entry.url ] = entry.reason;
+				}
+				expect( reasons ).toHaveKey( noindexUrl );
+				expect( reasons[ noindexUrl ] ).toBe( "noindex" );
+			} );
+
+			it( "excludes a page served with an X-Robots-Tag noindex header", function(){
+				var xrobotsUrl = variables.appRoot & "xrobots.cfm";
+
+				var result = getInstance( "sitemapService@sitemap-spider" ).create( xrobotsUrl );
+
+				expect( hasPage( result.pages, xrobotsUrl ) ).toBeFalse();
+
+				var reasons = {};
+				for ( var entry in result.ignored ) {
+					reasons[ entry.url ] = entry.reason;
+				}
+				expect( reasons ).toHaveKey( xrobotsUrl );
+				expect( reasons[ xrobotsUrl ] ).toBe( "noindex" );
+			} );
+
+			it( "lists noindex pages when respectNoIndex is off", function(){
+				var noindexUrl = variables.appRoot & "noindex.cfm";
+				var settings   = getInstance( "coldbox:moduleSettings:sitemap-spider" );
+				var savedFlag  = settings.respectNoIndex;
+				settings.respectNoIndex = false;
+				try {
+					var result = getInstance( "sitemapService@sitemap-spider" ).create( noindexUrl );
+					expect( hasPage( result.pages, noindexUrl ) ).toBeTrue();
+				} finally {
+					settings.respectNoIndex = savedFlag;
+				}
+			} );
 
 		} );
 

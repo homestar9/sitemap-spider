@@ -633,6 +633,68 @@ component accessors=true hint="Parses HTML content to extract links and metadata
         }
     }
 
+    /**
+     * Checks whether a page asked search engines not to index it.
+     * @fetchResult The fetch result containing headers and body.
+     * @parsedPage The jSoup document for the page (optional). When absent, only
+     *   the response header is checked — this is the non-HTML case.
+     *
+     * Returns true when either source carries a noindex (or none) directive:
+     *   1. The "X-Robots-Tag" response header.
+     *   2. Any <meta name="robots"> tag on the page. A page can have several,
+     *      and jsoup matches the name attribute case-insensitively, so
+     *      <META NAME="ROBOTS"> is covered.
+     *
+     * The crawler uses this to leave the page out of the sitemap while still
+     * following its links, because noindex does not imply nofollow.
+     */
+    boolean function isNoIndex( required struct fetchResult, any parsedPage ) {
+        if (
+            fetchResult.headers.keyExists( "X-Robots-Tag" )
+            && hasNoIndexToken( fetchResult.headers[ "X-Robots-Tag" ] )
+        ) {
+            return true;
+        }
+
+        if ( arguments.keyExists( "parsedPage" ) && !isNull( arguments.parsedPage ) ) {
+            for ( var meta in arguments.parsedPage.select( "meta[name=robots]" ) ) {
+                if ( hasNoIndexToken( meta.attr( "content" ) ) ) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * True when a robots directive list contains a "noindex" or "none" token
+     * ("none" means noindex + nofollow).
+     * @value The raw directive list, e.g. "noindex, follow".
+     *
+     * Directives are comma-separated. An X-Robots-Tag value can scope a
+     * directive to one crawler with a colon ("googlebot: noindex"); the part
+     * after the colon is compared, so an agent-scoped noindex counts as a
+     * global one. That deliberately over-excludes: a page hidden from any
+     * named crawler is left out of the sitemap for all of them, which is the
+     * safe reading for a sitemap.
+     */
+    private boolean function hasNoIndexToken( required string value ) {
+        for ( var token in listToArray( arguments.value, "," ) ) {
+            var directive = trim( token );
+            // "googlebot: noindex" scopes the directive to one agent; compare
+            // the directive part after the colon.
+            var colonPos = directive.find( ":" );
+            if ( colonPos > 0 ) {
+                directive = trim( mid( directive, colonPos + 1, len( directive ) ) );
+            }
+            if ( directive == "noindex" || directive == "none" ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     string function getCanonicalUrl( required struct fetchResult, any parsedPage ) {
         // If parsedPage is provided, use it; otherwise, parse the HTML from fetchResult
         if ( arguments.keyExists( "parsedPage" ) ) {

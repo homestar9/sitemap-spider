@@ -58,10 +58,12 @@ component accessors=true hint="Handles crawling of website URLs" {
         variables.redirects = {};
         // Map of URL -> reason for URLs dropped during the crawl, surfaced in the
         // result as the "ignored" array. Reasons: "nofollow", "excluded",
-        // "disallowed", and "notAllowed" (off-host, wrong scheme, or asset pattern
-        // — only a rejected seed produces this one; discovered links are already
-        // filtered before they reach here). A CFML struct in sync; initAsyncState
-        // swaps it for a ConcurrentHashMap.
+        // "disallowed", "noindex" (the page's robots directives say noindex, so
+        // it is crawled for links but kept out of the sitemap), and "notAllowed"
+        // (off-host, wrong scheme, or asset pattern — only a rejected seed
+        // produces this one; discovered links are already filtered before they
+        // reach here). A CFML struct in sync; initAsyncState swaps it for a
+        // ConcurrentHashMap.
         variables.ignoredUrls = {};
         // robots.txt state, (re)loaded at the start of each crawl().
         variables.robotsBasePath = "/"; // site-root path the seed URL lives under
@@ -494,6 +496,7 @@ component accessors=true hint="Handles crawling of website URLs" {
         var images = []; // filled from the parsed page only when includeImages is on
         var alternates = []; // filled only when includeHreflang is on
         var videos = []; // filled only when includeVideos is on
+        var noIndex = false; // set below from the page's robots directives
         var priority = getPriority( depth );
 
         // jsoup follows HTTP 30x, so fetchResult.url is the final URL and may
@@ -522,6 +525,12 @@ component accessors=true hint="Handles crawling of website URLs" {
             }
             // determine the last modified date
             lastModified = parser.getLastModified( fetchResult, parsedPage );
+
+            // A noindex directive (meta robots tag or X-Robots-Tag header) keeps
+            // the page out of the sitemap below, but its links are still followed.
+            if ( settings.respectNoIndex ) {
+                noIndex = parser.isNoIndex( fetchResult, parsedPage );
+            }
 
             // collect the page's images for an image sitemap, only when the
             // includeImages setting is on (otherwise the page struct stays
@@ -561,6 +570,10 @@ component accessors=true hint="Handles crawling of website URLs" {
             canonicalUrl = parser.getCanonicalUrl( fetchResult );
             // and the last modified date from headers
             lastModified = parser.getLastModified( fetchResult );
+            // no parsed page here, so only the X-Robots-Tag header can say noindex
+            if ( settings.respectNoIndex ) {
+                noIndex = parser.isNoIndex( fetchResult );
+            }
         }
 
         // The page is recorded under the canonical URL if it declares one, else
@@ -576,23 +589,30 @@ component accessors=true hint="Handles crawling of website URLs" {
             return;
         }
 
-        // append the page to our sitemap
-        // Store a real date when one was parsed, else fall back per the
-        // lastModFallback setting: "crawlTime" records the crawl timestamp (old
-        // behavior); "omit" (default) records "" so the generator leaves out
-        // <lastmod> for this URL. Parser.getLastModified already returns a real
-        // date or "", so no format guessing happens here.
-        appendPage(
-            url = resolved.url,
-            lastModified = isDate( lastModified )
-                ? lastModified
-                : ( settings.lastModFallback == "crawlTime" ? now() : "" ),
-            priority = priority,
-            depth = depth,
-            images = images,
-            alternates = alternates,
-            videos = videos
-        );
+        if ( noIndex ) {
+            // The page asked search engines not to index it, so it stays out of
+            // the sitemap — but its links were extracted above and are enqueued
+            // below, because noindex does not mean nofollow.
+            appendIgnoredUrl( resolved.url, "noindex" );
+        } else {
+            // append the page to our sitemap
+            // Store a real date when one was parsed, else fall back per the
+            // lastModFallback setting: "crawlTime" records the crawl timestamp (old
+            // behavior); "omit" (default) records "" so the generator leaves out
+            // <lastmod> for this URL. Parser.getLastModified already returns a real
+            // date or "", so no format guessing happens here.
+            appendPage(
+                url = resolved.url,
+                lastModified = isDate( lastModified )
+                    ? lastModified
+                    : ( settings.lastModFallback == "crawlTime" ? now() : "" ),
+                priority = priority,
+                depth = depth,
+                images = images,
+                alternates = alternates,
+                videos = videos
+            );
+        }
 
         // loop through the links and enqueue. enqueueDecision returns "" to enqueue
         // or a reason to skip; a skipped link is recorded in ignoredUrls so the
@@ -840,8 +860,8 @@ component accessors=true hint="Handles crawling of website URLs" {
      * Records a link dropped during the crawl in the ignoredUrls map, keyed by URL
      * with the drop reason as the value.
      * @url The dropped URL
-     * @reason Why it was dropped ("nofollow", "excluded", "disallowed", or
-     *   "notAllowed" — the last only for a rejected seed)
+     * @reason Why it was dropped ("nofollow", "excluded", "disallowed",
+     *   "noindex", or "notAllowed" — the last only for a rejected seed)
      *
      * The first reason recorded for a URL wins: the same URL can be dropped for
      * different reasons on different pages (e.g. nofollow on one page, a normal

@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `respectNoIndex` setting (default `true`). A page carrying
+  `<meta name="robots" content="noindex">` (or `none`) or an
+  `X-Robots-Tag: noindex` response header is left out of the sitemap and
+  reported in `ignored` with the new reason `"noindex"`. Its links are still
+  followed, because `noindex` does not mean `nofollow`. An agent-scoped header
+  directive (`googlebot: noindex`) counts as global on purpose. Set the flag
+  to `false` to list such pages anyway.
+
 - JSON-LD videos. `includeVideos` now reads schema.org `VideoObject` entries out
   of `<script type="application/ld+json">` blocks, on top of the Open Graph tags
   and `<video>` elements it already read. Entries are found wherever they sit in

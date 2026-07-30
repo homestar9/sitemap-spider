@@ -958,6 +958,54 @@ component extends="coldbox.system.testing.BaseTestCase" appMapping="root" {
 
 			} );
 
+			describe( "isNoIndex()", function(){
+
+				it( "detects a meta robots noindex tag", function(){
+					var page = variables.parser.parseHtml(
+						'<html><head><meta name="robots" content="noindex"></head></html>'
+					);
+					expect( variables.parser.isNoIndex( { headers : {} }, page ) ).toBeTrue();
+				} );
+
+				it( "detects noindex among comma-separated directives", function(){
+					var page = variables.parser.parseHtml(
+						'<html><head><meta name="robots" content="noindex, follow"></head></html>'
+					);
+					expect( variables.parser.isNoIndex( { headers : {} }, page ) ).toBeTrue();
+				} );
+
+				it( "treats meta robots none as noindex", function(){
+					// "none" means noindex + nofollow.
+					var page = variables.parser.parseHtml(
+						'<html><head><meta name="robots" content="none"></head></html>'
+					);
+					expect( variables.parser.isNoIndex( { headers : {} }, page ) ).toBeTrue();
+				} );
+
+				it( "ignores a nofollow-only robots meta", function(){
+					var page = variables.parser.parseHtml(
+						'<html><head><meta name="robots" content="nofollow"></head></html>'
+					);
+					expect( variables.parser.isNoIndex( { headers : {} }, page ) ).toBeFalse();
+				} );
+
+				it( "detects an X-Robots-Tag noindex response header without a parsed page", function(){
+					expect( variables.parser.isNoIndex( { headers : { "X-Robots-Tag" : "noindex" } } ) ).toBeTrue();
+				} );
+
+				it( "detects an agent-scoped X-Robots-Tag directive", function(){
+					// "googlebot: noindex" is scoped to one crawler, but the page is
+					// still left out of the sitemap for all of them on purpose.
+					expect( variables.parser.isNoIndex( { headers : { "X-Robots-Tag" : "googlebot: noindex" } } ) ).toBeTrue();
+				} );
+
+				it( "returns false when neither header nor meta tag is present", function(){
+					var page = variables.parser.parseHtml( "<html><head></head><body></body></html>" );
+					expect( variables.parser.isNoIndex( { headers : {} }, page ) ).toBeFalse();
+				} );
+
+			} );
+
 		} );
 	}
 

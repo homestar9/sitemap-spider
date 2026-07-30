@@ -91,6 +91,12 @@ component {
             // jobReaperIntervalSeconds: how often that cleanup task runs.
             jobReaperIntervalSeconds : 60,
             respectRobotsTxt : true, // fetch and honor robots.txt Disallow/Allow rules
+            // When true (default), a page carrying <meta name="robots" content="noindex">
+            // or an X-Robots-Tag: noindex response header is left out of the
+            // sitemap. Its links are still followed (noindex is not nofollow);
+            // the page lands in the result's ignored list with reason "noindex".
+            // false lists such pages anyway.
+            respectNoIndex : true,
             userAgent : "sitemap-spider", // matched against robots User-agent groups and sent on fetches
             maxCrawlDelay : 10, // cap (seconds) on the robots Crawl-delay actually applied between fetches
             notAllowedPattern : "\.(png|webp|svg|gif|js|css|jpg|jpeg)$|javascript:|mailto:|tel:",

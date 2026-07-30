@@ -86,7 +86,7 @@ var result = getInstance( "SitemapService@sitemap-spider" ).create(
 | `duration` | number | Total crawl + generate time in milliseconds. |
 | `processedUrls` | array | Every URL the crawler visited (used to avoid re-visiting). |
 | `badUrls` | struct | URLs that failed to fetch or returned a non-HTML / error response, keyed by URL with a `{ message }` value. |
-| `ignored` | array | URLs the crawl dropped, each `{ url, reason }`. `reason` is `"nofollow"`, `"excluded"` (matched `excludeUrls` or `excludePattern`), `"disallowed"` (blocked by `robots.txt`), or `"notAllowed"` (a rejected seed that is off-host, the wrong scheme, or an asset URL). A rejected start/seed URL is reported here too. |
+| `ignored` | array | URLs the crawl dropped, each `{ url, reason }`. `reason` is `"nofollow"`, `"excluded"` (matched `excludeUrls` or `excludePattern`), `"disallowed"` (blocked by `robots.txt`), `"noindex"` (the page carries a `noindex` robots directive — see `respectNoIndex`), or `"notAllowed"` (a rejected seed that is off-host, the wrong scheme, or an asset URL). A rejected start/seed URL is reported here too. |
 | `redirects` | array | One entry per fetched URL that followed an HTTP redirect: `{ from, to, chain }`. `from` is the requested URL, `to` is the final URL, and `chain` is the hop list, each `{ url, status }`. |
 | `filePath` | string | The path passed as `filePath`, or empty when nothing was saved. |
 | `saved` | boolean | `true` when the sitemap was written to `filePath`. |
@@ -129,6 +129,7 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `maxDepth` | `10` | Maximum link distance from a start URL to crawl. |
 | `maxPages` | `1000` | Maximum number of pages to record in one crawl. |
 | `respectRobotsTxt` | `true` | When true, fetches `robots.txt` and honors its `Disallow` / `Allow` rules and `Crawl-delay`. |
+| `respectNoIndex` | `true` | When true, a page carrying `<meta name="robots" content="noindex">` (or `none`) or an `X-Robots-Tag: noindex` response header is left out of the sitemap and reported in `ignored` with reason `"noindex"`. Its links are still followed, because `noindex` does not mean `nofollow`. An agent-scoped header directive (`googlebot: noindex`) counts as a global one on purpose. `false` lists such pages anyway. |
 | `userAgent` | `"sitemap-spider"` | Sent on every fetch, and matched against `robots.txt` `User-agent` groups. |
 | `maxCrawlDelay` | `10` | Upper cap, in seconds, on the `robots.txt` `Crawl-delay` actually applied between fetches. A `Crawl-delay` no longer forces a single-threaded crawl: a parallel crawl still honors it by spacing fetches this far apart across the workers. |
 | `notAllowedPattern` | `\.(png\|webp\|svg\|gif\|js\|css\|jpg\|jpeg)$\|javascript:\|mailto:\|tel:` | Links matching this regex are never crawled (asset files and non-HTTP schemes). |
