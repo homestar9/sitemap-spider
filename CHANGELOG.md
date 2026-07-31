@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-30
+
 ### Added
 
 - A broken link report, saved as JSON beside the sitemap. A crawl already visits
