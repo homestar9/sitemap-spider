@@ -17,7 +17,7 @@ documents/**
 
 # Personal local development session log
 /DEVNOTES.md
-docs/**
+plans/**
 
 # NPM, Bower, ETC
 **/node_modules/*
@@ -55,7 +55,6 @@ test-harness/media/**
 
 ## app-specific
 temp/**
-plans/**
 
 # Output of `box run-script create:admin` (install/CreateAdmin.cfc).
 # Contains a real BCrypt password hash. Delete it once the row is inserted.

@@ -44,9 +44,9 @@ box install sitemap-spider
 Call `create()` to crawl a site. It returns the pages, sitemap XML, and timing.
 
 ```cfml
-// Crawl one site.
-var result = getInstance( "SitemapService@sitemap-spider" )
-    .create( "https://example.com/" );
+property name="sitemapService" inject="SitemapService@sitemap-spider";
+
+var result = sitemapService.create( "https://example.com/" );
 
 writeOutput( result.sitemap );
 ```
@@ -54,7 +54,7 @@ writeOutput( result.sitemap );
 Start from several URLs, exclude some, and save the XML to disk in one call:
 
 ```cfml
-var result = getInstance( "SitemapService@sitemap-spider" ).create(
+var result = sitemapService.create(
     url         = [ "https://example.com/", "https://example.com/blog/" ],
     excludeUrls = [ "https://example.com/private/" ],
     filePath    = expandPath( "/public/sitemap.xml" )
@@ -68,10 +68,31 @@ still sets the host, `robots.txt` base, and split-file base URL. Every seed must
 use that host.
 
 ```cfml
-var result = getInstance( "SitemapService@sitemap-spider" ).create(
+var result = sitemapService.create(
     url      = "https://example.com/",
     seedUrls = [ "https://example.com/orphan-landing.cfm" ]
 );
+```
+
+## Publish the sitemap
+
+Save the sitemap at your site's public root so search engines can request
+`/sitemap.xml`:
+
+```cfml
+var result = sitemapService.create(
+    url      = "https://example.com/",
+    filePath = expandPath( "/sitemap.xml" )
+);
+```
+
+Most web servers serve this file directly without a ColdBox route. Add the
+generated file to `.gitignore`.
+
+Then add its public URL to `robots.txt`:
+
+```text
+Sitemap: https://example.com/sitemap.xml
 ```
 
 ## The return struct
@@ -88,10 +109,10 @@ var result = getInstance( "SitemapService@sitemap-spider" ).create(
 | `duration` | number | Total crawl + generate time in milliseconds. |
 | `stats` | struct | Counts for dashboards and job records: `{ generatedAt, durationMs, urlCount, sitemapCount, type, badUrlCount, ignoredCount, redirectCount, assetsCheckedCount, assetsBrokenCount }`. `generatedAt` is an ISO-8601 timestamp with the server's UTC offset. `durationMs` equals `duration`. |
 | `processedUrls` | array | Every URL the crawler visited. |
-| `badUrls` | struct | URLs that failed to fetch or check, keyed by URL. See [The link report](#the-link-report) for the entry shape. |
+| `badUrls` | struct | URLs that failed to fetch or check, keyed by URL. Each value contains the failure details described in the [report reference](docs/link-report.md#report-structure). |
 | `ignored` | array | Skipped URLs as `{ url, reason }`. Reasons are `"nofollow"`, `"excluded"`, `"disallowed"`, `"noindex"`, and `"notAllowed"`. Rejected start and seed URLs also appear here. |
 | `redirects` | array | One entry per fetched URL that followed an HTTP redirect: `{ from, to, status, chain, foundOn, foundOnTruncated }`. `from` is the requested URL, `to` is the final URL, `status` is the first hop's status, and `chain` is the hop list, each `{ url, status }`. |
-| `assetsChecked` | number | How many asset URLs were checked. Always `0` unless `checkAssets` is on. |
+| `runAsync` | boolean | Whether this crawl used parallel workers. |
 | `filePath` | string | The path passed as `filePath`, or empty when nothing was saved. |
 | `saved` | boolean | `true` when the sitemap was written to `filePath`. |
 | `metadataPath` | string | Where the metadata sidecar was written, or empty when none was. See `writeMetadata`. |
@@ -131,6 +152,8 @@ Each entry in `videos` looks like:
 Override any of these in your app's `config/ColdBox.cfc` under
 `moduleSettings.sitemap-spider`. Defaults come from `ModuleConfig.cfc`.
 
+### Common crawl settings
+
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `browserDsl` | `"Jsoup@sitemap-spider"` | Which browser backend fetches each URL. Set to `"Playwright@sitemap-spider"` for JavaScript rendering. |
@@ -147,33 +170,46 @@ Override any of these in your app's `config/ColdBox.cfc` under
 | `sessionParams` | `cfid,cftoken,jsessionid,utm_source,...` | Query-param and `;jsessionid` path-param names stripped during URL normalization, so session tokens and tracking params never reach dedup keys or the sitemap. Matched case-insensitively. The full default list also covers `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `fbclid`, and `gclid`. |
 | `priority` | `1.0` | `<priority>` assigned to the start URL. |
 | `priorityDecrement` | `0.1` | How much `<priority>` drops per level of depth. |
+| `lastModFormat` | `"date"` | Format of `<lastmod>`: `"date"` writes `YYYY-MM-DD`; `"datetime"` writes the full W3C timestamp in the server's local timezone. |
+| `lastModFallback` | `"omit"` | `"omit"` leaves out an unknown `<lastmod>`; `"crawlTime"` uses the crawl timestamp. |
+| `requestTimeout` | `10000` | Per-request timeout in milliseconds. |
+| `maxBodySize` | `5242880` | Maximum response body downloaded by jsoup (5 MB). |
+| `maxRedirects` | `20` | Maximum redirect hops for jsoup. Playwright uses its browser limit. |
+| `htmlContentTypePattern` | `^(text/html\|application/xhtml\+xml)(;.*)?$` | Content types that are parsed for links and canonical URLs. |
+
+### Output and report settings
+
+| Setting | Default | Effect |
+| --- | --- | --- |
 | `maxUrlsPerSitemap` | `50000` | sitemaps.org per-file URL limit. Above this the output splits into a sitemap index. |
 | `maxSitemapBytes` | `52428800` | sitemaps.org per-file byte limit (50 MiB, uncompressed). Above this the output splits. |
 | `gzipOutput` | `false` | Saves compressed files with a `.gz` suffix. Child filenames and index locations also include `.gz`. See [Output and splitting](#output-and-splitting). |
-| `writeMetadata` | `false` | When true, writes a JSON sidecar holding the `stats` struct, crawl options, and module version. It uses `metadataPath` when configured, otherwise it is written next to `filePath` (`sitemap.xml` → `sitemap.xml.meta.json`). Read it later with `readMetadata()` — see [Host app integration](#host-app-integration). |
+| `writeMetadata` | `false` | When true, writes a JSON sidecar holding the `stats` struct and crawl options. It uses `metadataPath` when configured, otherwise it is written next to `filePath` (`sitemap.xml` → `sitemap.xml.meta.json`). Read it later with `readMetadata()` — see [Host app integration](#host-app-integration). |
 | `metadataPath` | `""` (empty) | Default metadata filename. Set it outside the webroot to keep it private. An omitted method argument uses this setting. A non-empty argument replaces it. An explicit empty argument saves beside the sitemap. Use a distinct path for each crawl or job. |
 | `metadataIncludeUrls` | `false` | Adds full `badUrls` and `ignored` lists to metadata. Store this file outside the webroot or block `*.meta.json` at the web server. |
-| `writeLinkReport` | `false` | When true, writes a JSON report of broken links, redirects, and skipped URLs. It uses `linkReportPath` when configured, otherwise it is written next to `filePath` (`sitemap.xml` → `sitemap.xml.links.json`). Read it later with `readLinkReport()`. See [The link report](#the-link-report). |
+| `writeLinkReport` | `false` | When true, writes a JSON report of broken links, redirects, and skipped URLs. It uses `linkReportPath` when configured, otherwise it is written next to `filePath` (`sitemap.xml` → `sitemap.xml.links.json`). Read it later with `readLinkReport()`. See [Broken link reports](#broken-link-reports). |
 | `linkReportPath` | `""` (empty) | Default link report filename. Set it outside the webroot to keep it private. An omitted method argument uses this setting. A non-empty argument replaces it. An explicit empty argument saves beside the sitemap. Use a distinct path for each crawl or job. |
 | `trackInboundLinks` | `true` | Records which pages link to each URL, so a broken link can name the pages that need fixing. Referrers are dropped as URLs are fetched successfully, so memory tracks the queue and the failures rather than every link on the site. |
 | `maxInboundLinks` | `10` | How many linking pages to keep per URL. Past this the report sets `foundOnTruncated`. |
-| `checkAssets` | `false` | Requests the status of on-host images, stylesheets, scripts, and linked files that `notAllowedPattern` blocks. These are never crawled as pages and never reach the sitemap. This is the only part of the report that makes extra HTTP requests. See [The link report](#the-link-report). |
+| `checkAssets` | `false` | Requests the status of on-host images, stylesheets, scripts, and linked files that `notAllowedPattern` blocks. These are never crawled as pages and never reach the sitemap. This is the only part of the report that makes extra HTTP requests. See [Broken link reports](#broken-link-reports). |
 | `maxAssetChecks` | `5000` | Maximum unique asset URLs checked in one crawl. Reaching it logs a warning and stops collecting. |
-| `lastModFormat` | `"date"` | Format of `<lastmod>`: `"date"` writes the date-only form (`YYYY-MM-DD`); `"datetime"` writes the full W3C timestamp (`YYYY-MM-DDThh:mm:ss+HH:MM`) in the server's local timezone. |
 | `includeImages` | `false` | Adds `<img src>` URLs as `<image:image>`. Keeps off-host CDN images and limits each page to 1000 images. The `create()` argument overrides this setting for one crawl. |
 | `includeHreflang` | `false` | Adds alternate links as `<xhtml:link>`. Keeps off-host targets and `x-default`, with a limit of 1000 per page. The `create()` argument overrides this setting for one crawl. |
 | `includeVideos` | `false` | Adds `<video:video>` from JSON-LD, Open Graph, and `<video>` elements. Omits videos missing a thumbnail, title, description, or media/player URL. Limits each page to 100 videos. The `create()` argument overrides this setting for one crawl. |
-| `lastModFallback` | `"omit"` | What `<lastmod>` does when a page has no parseable Last-Modified: `"omit"` leaves it out; `"crawlTime"` records the crawl timestamp. |
-| `requestTimeout` | `10000` | Per-request timeout in milliseconds. |
-| `maxBodySize` | `5242880` | Cap (bytes) on the response body a fetch downloads (5 MB). |
-| `maxRedirects` | `20` | Maximum redirect hops for Jsoup. Exceeding it records a bad URL. Playwright uses its browser limit. |
+
+### Playwright and runtime settings
+
+| Setting | Default | Effect |
+| --- | --- | --- |
 | `waitStrategy` | `"networkidle"` | Playwright backend only. Page load state to wait for after navigation (`"load"` or `"networkidle"`). |
 | `waitMs` | `0` | Playwright only. Fixed wait after every navigation. Prefer `waitForSelector` for a known element. |
 | `waitForSelector` | `""` (empty) | Playwright only. Waits up to `requestTimeout` for a CSS selector. A timeout logs a warning and continues. |
 | `libPath` | `<modulePath>/lib` | Directory cbjavaloader loads the jsoup jar from. |
-| `htmlContentTypePattern` | `^(text/html\|application/xhtml\+xml)(;.*)?$` | Only responses whose content type matches are parsed for links and canonical URLs. |
 
-These apply only to background jobs (see [Background jobs](#background-jobs)):
+### Background job settings
+
+These settings apply only to background jobs. See
+[Background jobs](#background-jobs).
 
 | Setting | Default | Effect |
 | --- | --- | --- |
@@ -207,23 +243,9 @@ The `browserDsl` argument to `create()` or `SitemapJobRegistry.queue()` override
 the setting for one crawl. Each Playwright crawl starts a browser process, so
 use it only for sites that need JavaScript.
 
-### Writing your own backend
-
-`IBrowser` requires `fetchUrl()`, `checkUrl()`, `getText()`, `shutdown()`, and
-`supportsParallel()`. Extend `BaseBrowser` and you inherit working versions of
-the last three, plus a `checkUrl()` that asks the jsoup backend for the status.
-Reading a status code needs no JavaScript, so that default is usually the right
-one even for a rendering backend.
-
-Two details matter for the link report:
-
-- `fetchUrl()` must throw `StatusCodeException` for a non-200 response. Set
-  `errorCode` to the HTTP status and `extendedInfo` to a JSON string with
-  `status`, `url`, and `chain` keys. A backend that omits them still crawls
-  fine, but its failures report `status: 0` and `reason: "unknown"`.
-- `checkUrl()` must never throw. It returns
-  `{ ok, status, url, redirectChain, error }` for every URL, including ones that
-  could not be reached.
+Custom browser implementations must follow the `IBrowser` interface. See
+[Custom browser backends](docs/link-report.md#custom-browser-backends) for the
+failure details required by link reports.
 
 ## cbPlaywright setup (optional)
 
@@ -339,11 +361,10 @@ Playwright renders JavaScript in headless Chromium. Set it up as follows:
   sitemapService.create( url = "https://example.com/", includeVideos = true );
   ```
 
-## The link report
+## Broken link reports
 
-A crawl already visits every page on the site, so it already knows which links
-are dead. Turn on `writeLinkReport` and that information is saved as JSON beside
-the sitemap instead of being thrown away.
+Enable `writeLinkReport` to save broken pages, redirects, and skipped URLs as
+JSON beside the sitemap:
 
 ```cfml
 var result = sitemapService.create(
@@ -356,80 +377,9 @@ var result = sitemapService.create(
 var report = sitemapService.readLinkReport( result.linkReportPath );
 ```
 
-Reporting broken **pages** costs nothing: no extra requests are made, because the
-crawler was fetching those URLs anyway. Only `checkAssets` adds requests.
-
-### What the report contains
-
-```cfml
-{
-    schemaVersion : 1,
-    moduleVersion : "1.1.0",
-    generatedAt   : "2026-07-30T09:00:00-05:00",  // matches stats.generatedAt
-    site          : "https://example.com/",
-    summary       : {
-        checked       : 1263,  // pagesChecked + assetsChecked
-        pagesChecked  : 1247,
-        assetsChecked : 16,
-        broken        : 7,
-        brokenAssets  : 5,
-        redirected    : 31,
-        skipped       : 22
-    },
-    broken    : [ ... ],
-    redirects : [ ... ],
-    skipped   : [ ... ]
-}
-```
-
-Each `broken` entry, which is also the shape of a `badUrls` value in the return
-struct:
-
-```cfml
-{
-    url              : "https://example.com/gone.cfm",
-    status           : 404,        // 0 when the request never got a response
-    reason           : "notFound",
-    message          : "Failed to fetch ... status code 404",
-    kind             : "page",     // "page" or "asset"
-    foundOn          : [ "https://example.com/about/" ],
-    foundOnTruncated : false,      // true when maxInboundLinks was reached
-    redirectChain    : [ { url : "...", status : 301 } ]
-}
-```
-
-`reason` is one of:
-
-| Reason | Meaning |
-| --- | --- |
-| `notFound` | 404 or 410. |
-| `serverError` | Any 5xx. |
-| `clientError` | Any other 4xx, such as 403. |
-| `redirectError` | A 3xx the browser could not follow, such as one with no `Location` header. |
-| `tooManyRedirects` | The hop limit in `maxRedirects` was reached. |
-| `timeout` | The request timed out. |
-| `connectionFailed` | DNS, TLS, or connection failure. |
-| `unknown` | No status and no recognizable cause. A custom `IBrowser` that does not set `errorCode` reports this. |
-
-`broken` is sorted with server errors first, then missing pages, then transport
-failures, and by URL within each reason. A `redirects` entry adds `permanent`,
-which is true for a 301 or 308 — those are the moves worth updating links for.
-
-### Which pages link to a broken URL
-
-`foundOn` names them, which is what turns "this URL is dead" into something a
-webmaster can act on. Referrers are only kept for URLs that might need reporting:
-once a URL is fetched successfully and did not move, its referrers are dropped.
-A redirected URL keeps them, because those are exactly the links to update.
-
-Set `trackInboundLinks` to `false` to turn this off, or lower `maxInboundLinks`
-from its default of 10.
-
-### Checking assets
-
-By default the report covers pages only, so a broken `<img>` does not appear.
-Turn on `checkAssets` to also check on-host images, stylesheets, scripts, and
-links to files that `notAllowedPattern` blocks:
+Broken-page reporting adds no HTTP requests because the crawler already visits
+those URLs. Enable `checkAssets` to make additional checks for on-host images,
+stylesheets, scripts, and linked files:
 
 ```cfml
 moduleSettings = {
@@ -437,28 +387,11 @@ moduleSettings = {
 };
 ```
 
-Asset checking:
+Store link reports outside the webroot or block `*.links.json` at the web
+server because they can reveal failed and deliberately skipped URLs.
 
-- Runs after the page crawl, so each unique asset is requested **once** no matter
-  how many pages use it.
-- Uses a `HEAD` request, falling back to a one-byte `GET` when the server rejects
-  `HEAD` with a 405 or 501.
-- Never adds an asset to `pages`, to `maxPages`, or to the sitemap XML.
-- Ignores off-host assets. Third-party URLs are out of scope.
-- Stops at `maxAssetChecks` and logs a warning.
-
-Broken assets appear in `broken` with `kind` set to `"asset"`, and are counted by
-`summary.brokenAssets` and `stats.assetsBrokenCount`.
-
-### Notes
-
-- The report never changes the sitemap. The same crawl produces byte-identical
-  XML with the report on or off.
-- Write it outside the webroot, or block `*.links.json` at the web server. It
-  names URLs that failed and pages that were deliberately skipped.
-- `readLinkReport()` accepts either the report path or the sitemap path, and
-  returns `{ exists : false }` when the file is missing or is not valid JSON.
-- A failed write throws `sitemap-spider.LinkReportSaveFailed`.
+See [Broken link report reference](docs/link-report.md) for the JSON format,
+failure reasons, asset behavior, and custom browser requirements.
 
 ## Host app integration
 
@@ -485,29 +418,6 @@ URL paths also remain distinct after normalization: repeated slashes such as
 Sites that serve the same page at both URLs should emit one consistent link
 form and redirect the other, or declare a common `rel="canonical"`.
 
-**Write into the webroot.** Search engines expect `/sitemap.xml` at the site
-root, so pass that as `filePath`:
-
-```cfml
-property name="sitemapService" inject="SitemapService@sitemap-spider";
-
-var result = sitemapService.create(
-    url           = "https://example.com/",
-    filePath      = expandPath( "/sitemap.xml" ),
-    writeMetadata = true
-);
-```
-
-Most web servers serve this physical file without a ColdBox route. Add generated
-files to `.gitignore`.
-
-**Point robots.txt at it.** Add one line so crawlers find the sitemap without
-being told:
-
-```
-Sitemap: https://example.com/sitemap.xml
-```
-
 **Save stats without job records.** Use a private path so URL details cannot
 become public:
 
@@ -526,7 +436,7 @@ remains available after in-memory job records disappear.
 ```cfml
 var metadata = sitemapService.readMetadata( expandPath( "/sitemap.xml" ) );
 if ( metadata.exists ) {
-    // Read metadata.stats, metadata.options, and metadata.moduleVersion.
+    // Read metadata.stats and metadata.options.
 }
 ```
 
@@ -604,7 +514,7 @@ the engine's thread limit.
 - **`writeLinkReport`, `linkReportPath`** control the job's link report, and are
   saved at queue time the same way. The result includes `linkReportPath` and
   `linkReportSaved`, so a background crawl can point at its report. See
-  [The link report](#the-link-report).
+  [Broken link reports](#broken-link-reports).
 - **`meta`** stores your own values without interpreting them. Filter these
   values with `jobs.listJobs( { customerId : "acme" } )`. You can also filter
   status with `jobs.listJobs( { status : "running" } )`.
